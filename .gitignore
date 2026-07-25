@@ -1,0 +1,7 @@
+data/stocks/
+data/*.zip
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
+download_log.txt
+download_historical_log.txt
