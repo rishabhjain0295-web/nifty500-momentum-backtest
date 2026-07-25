@@ -34,7 +34,7 @@ MEMBERSHIP_CSV = ROOT / "data" / "nifty500_membership_calendar.csv"
 # GitHub Release asset on first run instead. Set via the DATA_ARCHIVE_URL
 # environment variable (or Streamlit secrets) in deployment; falls back to
 # this constant, which must be updated after the release is created.
-DATA_ARCHIVE_URL = "https://github.com/REPLACE_ME/REPLACE_ME/releases/download/data-v1/stocks.zip"
+DATA_ARCHIVE_URL = "https://github.com/rishabhjain0295-web/nifty500-momentum-backtest/releases/download/data-v1/stocks.zip"
 
 
 def ensure_stock_data(archive_url: str | None = None) -> None:
