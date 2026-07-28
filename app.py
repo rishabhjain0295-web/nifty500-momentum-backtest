@@ -76,6 +76,19 @@ with st.sidebar:
         help="Excludes the most recent N months from the lookback, to avoid short-term reversal effects."
     )
 
+    weighting_label = st.radio(
+        "Rebalancing weight method",
+        ["Equal weight every month", "Equal weight at rebalance, drift between"],
+        index=0,
+        help="Equal weight every month: weights reset to exactly 1/N every month, even between "
+             "rebalances -- a winner's gain never lets it grow as a share of the portfolio for "
+             "next month. Equal weight at rebalance, drift between: weights are set to 1/N only "
+             "at each rebalance; between rebalances a stock's own performance lets its weight "
+             "drift up or down (winners compound, laggards shrink) until the next rebalance "
+             "resets everyone -- this is how real equal-weight index funds/ETFs actually work."
+    )
+    weighting_mode = "equal_monthly" if weighting_label == "Equal weight every month" else "drift"
+
     use_exit_band = st.checkbox(
         "Custom exit criteria", value=False,
         help="Optional turnover-reduction rule. Off: a held stock exits as soon as its "
@@ -175,6 +188,7 @@ strat_rets, holdings_history = run_backtest(
     monthly_prices, membership, lookback_months, skip_months, hold_months, n_stocks, min_price,
     use_exit_band, exit_band_pct,
     use_regime_filter, bench_px, gold_px, gold_entry_lookback, gold_exit_lookback,
+    weighting_mode,
 )
 
 bench_rets = bench_px.pct_change().reindex(strat_rets.index).dropna()

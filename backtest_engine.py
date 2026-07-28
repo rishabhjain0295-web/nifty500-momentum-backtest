@@ -132,6 +132,7 @@ def run_backtest(
     gold_series: pd.Series | None = None,
     gold_entry_lookback: int = 150,
     gold_exit_lookback: int = 55,
+    weighting_mode: str = "equal_monthly",
 ) -> tuple[pd.Series, list[tuple[pd.Timestamp, list[str]]]]:
     """Returns (monthly portfolio returns, [(rebalance_date, holdings), ...]).
 
@@ -143,6 +144,26 @@ def run_backtest(
     a stock hovering near the cutoff stay put instead of round-tripping in
     and out on every rebalance. exit_band_pct=0 (or use_exit_band=False)
     reproduces the plain top-N-in/top-N-out behavior exactly.
+
+    weighting_mode controls how the portfolio is weighted between rebalances:
+      - "equal_monthly" (default): weights reset to equal every month, even
+        between rebalances. A stock's return that month never lets it grow
+        (or shrink) as a share of the portfolio for next month -- every
+        month is a fresh equal-weighted average. This is a common academic-
+        backtest simplification (implicit frictionless monthly rebalancing)
+        but isn't literally "buy and hold" between rebalances.
+      - "drift": equal-weighted only at the moment of each rebalance (shares
+        are set so each holding starts at 1/n_stocks of portfolio value);
+        between rebalances, weights drift naturally with each stock's own
+        performance -- winners become a larger share of the portfolio,
+        laggards a smaller one, until the next rebalance resets everyone
+        (including survivors) back to equal weight. This is how real
+        equal-weight index funds/ETFs actually rebalance.
+    Note: tax_cost_engine.py's per-trade gain sizing already assumes each
+    position is 1/n_stocks of NAV at entry and drifts with that stock's own
+    return until exit -- i.e. it implicitly matches "drift" regardless of
+    which weighting_mode produced the return series. This is an existing
+    approximation, not new to this parameter.
 
     Regime filter (use_regime_filter=True, requires nifty500_index and
     gold_series): at each rebalance, while in the "momentum" regime, compare
@@ -174,6 +195,8 @@ def run_backtest(
     current_holdings: list[str] = []
     regime = "momentum"
     months_held = 0
+    shares: dict[str, float] = {}   # only used in "drift" mode
+    nav = 1.0                       # running portfolio value, drives drift-mode reallocation sizing
 
     for i in range(min_history_months, len(dates)):
         today = dates[i]
@@ -181,11 +204,23 @@ def run_backtest(
 
         if regime == "gold":
             r = gold_rets.loc[today] if gold_rets is not None else np.nan
-            portfolio_rets.loc[today] = r if pd.notna(r) else 0.0
+            r = r if pd.notna(r) else 0.0
         elif current_holdings:
-            portfolio_rets.loc[today] = monthly_rets.loc[today, current_holdings].mean()
+            if weighting_mode == "drift" and shares:
+                px_today = monthly_prices.loc[today, current_holdings]
+                value_today = sum(
+                    shares[s] * px_today[s] for s in current_holdings if pd.notna(px_today.get(s))
+                )
+                r = value_today / nav - 1 if nav > 0 else 0.0
+            else:
+                r = monthly_rets.loc[today, current_holdings].mean()
+                if pd.isna(r):
+                    r = 0.0
         else:
-            portfolio_rets.loc[today] = 0.0
+            r = 0.0
+
+        portfolio_rets.loc[today] = r
+        nav *= (1 + r)
 
         months_held += 1
         if months_held < hold_months and holding_something:
@@ -203,6 +238,7 @@ def run_backtest(
 
         if regime == "gold":
             current_holdings = []
+            shares = {}
             holdings_history.append((today, ["GOLD"]))
             months_held = 0
             continue
@@ -241,6 +277,14 @@ def run_backtest(
 
         holdings_history.append((today, current_holdings))
         months_held = 0
+
+        if weighting_mode == "drift" and current_holdings:
+            px_now = monthly_prices.loc[today, current_holdings]
+            per_stock_value = nav / len(current_holdings)
+            shares = {
+                s: (per_stock_value / px_now[s]) if pd.notna(px_now.get(s)) and px_now[s] > 0 else 0.0
+                for s in current_holdings
+            }
 
     return portfolio_rets.dropna(), holdings_history
 
@@ -300,6 +344,7 @@ def run_full_backtest(
     use_regime_filter: bool = False,
     gold_entry_lookback: int = 150,
     gold_exit_lookback: int = 55,
+    weighting_mode: str = "equal_monthly",
 ):
     """End-to-end: load data, run strategy, align to benchmark. Returns a dict."""
     monthly_prices = load_prices(price_col)
@@ -314,6 +359,7 @@ def run_full_backtest(
         monthly_prices, membership, lookback_months, skip_months, hold_months, n_stocks, min_price,
         use_exit_band, exit_band_pct,
         use_regime_filter, bench_px, gold_px, gold_entry_lookback, gold_exit_lookback,
+        weighting_mode,
     )
 
     bench_rets = bench_px.pct_change().reindex(strat_rets.index).dropna()
