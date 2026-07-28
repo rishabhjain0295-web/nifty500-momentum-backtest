@@ -70,6 +70,24 @@ with st.sidebar:
         help="Excludes the most recent N months from the lookback, to avoid short-term reversal effects."
     )
 
+    use_exit_band = st.checkbox(
+        "Custom exit criteria", value=False,
+        help="Optional turnover-reduction rule. Off: a held stock exits as soon as its "
+             "momentum rank falls out of the top N (same as entries). On: a held stock "
+             "is only exited once its rank falls below N x (1 + exit%) -- new stocks are "
+             "still only ever added from the top N."
+    )
+    exit_band_pct = 0.0
+    if use_exit_band:
+        exit_band_pct = st.slider(
+            "Exit threshold (% beyond N)", min_value=0, max_value=300, value=100, step=10,
+        )
+        exit_rank_preview = int(round(n_stocks * (1 + exit_band_pct / 100)))
+        st.caption(
+            f"With {n_stocks} stocks and {exit_band_pct}% exit criteria, a held stock "
+            f"exits once its rank falls below {exit_rank_preview}."
+        )
+
     st.header("Universe & data")
     price_col = st.selectbox("Price field", ["Adj Close", "Close"], index=0)
     min_price = st.number_input("Minimum price filter (Rs)", min_value=0.0, value=10.0, step=5.0)
@@ -113,7 +131,8 @@ if use_membership_filter:
     )
 
 strat_rets, holdings_history = run_backtest(
-    monthly_prices, membership, lookback_months, skip_months, hold_months, n_stocks, min_price
+    monthly_prices, membership, lookback_months, skip_months, hold_months, n_stocks, min_price,
+    use_exit_band, exit_band_pct,
 )
 
 bench_px = cached_load_benchmark(price_col)

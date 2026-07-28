@@ -112,8 +112,20 @@ def run_backtest(
     hold_months: int = 1,
     n_stocks: int = 30,
     min_price: float = 10.0,
+    use_exit_band: bool = False,
+    exit_band_pct: float = 0.0,
 ) -> tuple[pd.Series, list[tuple[pd.Timestamp, list[str]]]]:
-    """Returns (monthly portfolio returns, [(rebalance_date, holdings), ...])."""
+    """Returns (monthly portfolio returns, [(rebalance_date, holdings), ...]).
+
+    Entries are always drawn from the top n_stocks by momentum rank. Exits
+    normally happen as soon as a held stock's rank drops out of the top
+    n_stocks too -- but with use_exit_band=True, a held stock is only exited
+    once its rank falls below n_stocks * (1 + exit_band_pct/100). This is a
+    standard turnover-reduction technique: widening the exit threshold lets
+    a stock hovering near the cutoff stay put instead of round-tripping in
+    and out on every rebalance. exit_band_pct=0 (or use_exit_band=False)
+    reproduces the plain top-N-in/top-N-out behavior exactly.
+    """
     min_history_months = lookback_months + skip_months + 1
     monthly_rets = monthly_prices.pct_change()
     dates = monthly_prices.index
@@ -153,7 +165,21 @@ def run_backtest(
         if len(mom) < n_stocks:
             continue
 
-        current_holdings = mom.sort_values(ascending=False).head(n_stocks).index.tolist()
+        ranked = mom.sort_values(ascending=False)
+        if use_exit_band and exit_band_pct > 0:
+            exit_threshold_rank = n_stocks * (1 + exit_band_pct / 100.0)
+            rank_of = {sym: pos + 1 for pos, sym in enumerate(ranked.index)}
+            survivors = [s for s in current_holdings if rank_of.get(s, float("inf")) <= exit_threshold_rank]
+            needed = n_stocks - len(survivors)
+            if needed > 0:
+                survivors_set = set(survivors)
+                new_entrants = [s for s in ranked.index if s not in survivors_set][:needed]
+            else:
+                new_entrants = []
+            current_holdings = survivors + new_entrants
+        else:
+            current_holdings = ranked.head(n_stocks).index.tolist()
+
         holdings_history.append((today, current_holdings))
         months_held = 0
 
@@ -210,6 +236,8 @@ def run_full_backtest(
     n_stocks: int = 30,
     min_price: float = 10.0,
     use_membership_filter: bool = True,
+    use_exit_band: bool = False,
+    exit_band_pct: float = 0.0,
 ):
     """End-to-end: load data, run strategy, align to benchmark. Returns a dict."""
     monthly_prices = load_prices(price_col)
@@ -218,7 +246,8 @@ def run_full_backtest(
         membership = load_membership_matrix(monthly_prices.index, monthly_prices.columns)
 
     strat_rets, holdings_history = run_backtest(
-        monthly_prices, membership, lookback_months, skip_months, hold_months, n_stocks, min_price
+        monthly_prices, membership, lookback_months, skip_months, hold_months, n_stocks, min_price,
+        use_exit_band, exit_band_pct,
     )
 
     bench_px = load_benchmark(price_col)

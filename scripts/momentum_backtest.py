@@ -20,6 +20,8 @@ HOLD_MONTHS = 1
 N_STOCKS = 30
 MIN_PRICE = 10.0
 USE_MEMBERSHIP_FILTER = True
+USE_EXIT_BAND = False    # turnover-reduction: keep a held stock until its rank falls below N*(1+EXIT_BAND_PCT/100)
+EXIT_BAND_PCT = 0.0
 
 
 def main():
@@ -32,6 +34,8 @@ def main():
         n_stocks=N_STOCKS,
         min_price=MIN_PRICE,
         use_membership_filter=USE_MEMBERSHIP_FILTER,
+        use_exit_band=USE_EXIT_BAND,
+        exit_band_pct=EXIT_BAND_PCT,
     )
 
     mp = result["monthly_prices"]
