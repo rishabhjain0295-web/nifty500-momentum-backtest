@@ -27,6 +27,11 @@ of Indian tax law. Key simplifications:
     Indian financial year (April-March), assuming this strategy is the only
     source of LTCG for the investor.
   - Surcharge is not modeled (it's income-level dependent); a flat cess is.
+  - Gold defensive-regime rotation (backtest_engine.run_backtest's "GOLD"
+    synthetic position): the equity-side cost of liquidating the stock
+    portfolio on the way into gold, or rebuilding it on the way back out, IS
+    charged. What's NOT modeled is the gold ETF leg's own entry/exit cost
+    or any capital-gains tax on gold trades themselves.
 
 Position sizing for tax purposes uses the *actual* post-cost-and-tax capital
 path (nav_net), so a realistic amount of capital compounds forward after
@@ -145,9 +150,18 @@ def simulate_costs_and_taxes(
 
         if d in rebalance_dates:
             new_holdings = set(holdings_by_date[d])
-            added = new_holdings - prev_holdings
-            dropped = prev_holdings - new_holdings
-            n_active = len(new_holdings) if new_holdings else n_stocks
+            # "GOLD" is a synthetic regime marker (see backtest_engine.run_backtest),
+            # not a real monthly_prices symbol -- exclude it from equity turnover/cost
+            # accounting. Its own entry/exit costs aren't modeled, but the equity-side
+            # cost of liquidating/rebuilding the stock portfolio around a gold rotation
+            # still is (dropping to {} on the way into gold, or filling up from {} on
+            # the way back).
+            equity_prev = prev_holdings - {"GOLD"}
+            equity_new = new_holdings - {"GOLD"}
+            added = equity_new - equity_prev
+            dropped = equity_prev - equity_new
+            n_active_buy = len(equity_new) if equity_new else n_stocks
+            n_active_sell = len(equity_prev) if equity_prev else n_stocks
 
             for sym in dropped:
                 entry_date, entry_price, entry_nav, entry_n_active = open_positions.pop(sym)
@@ -163,8 +177,8 @@ def simulate_costs_and_taxes(
                         "is_ltcg": hold_days >= tax.ltcg_holding_days,
                     })
 
-            buy_frac = len(added) / n_active
-            sell_frac = len(dropped) / n_active
+            buy_frac = len(added) / n_active_buy if n_active_buy else 0.0
+            sell_frac = len(dropped) / n_active_sell if n_active_sell else 0.0
             cost_drag = buy_frac * buy_cost_pct + sell_frac * sell_cost_pct
             cost_paid_series.loc[d] = cost_drag * nav_net * tax.capital_base_rs
             nav_net *= (1 - cost_drag)
@@ -173,7 +187,7 @@ def simulate_costs_and_taxes(
             for sym in added:
                 if sym in monthly_prices.columns and pd.notna(monthly_prices.loc[d, sym]):
                     entry_price = monthly_prices.loc[d, sym]
-                    open_positions[sym] = (d, entry_price, nav_net, n_active)
+                    open_positions[sym] = (d, entry_price, nav_net, n_active_buy)
 
             prev_holdings = new_holdings
 

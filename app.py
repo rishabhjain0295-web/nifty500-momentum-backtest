@@ -17,6 +17,7 @@ import streamlit as st
 from backtest_engine import (
     ensure_stock_data,
     load_benchmark,
+    load_gold_series,
     load_membership_matrix,
     load_prices,
     perf_stats,
@@ -39,6 +40,11 @@ def cached_load_prices(price_col: str) -> pd.DataFrame:
 @st.cache_data(show_spinner="Loading benchmark...")
 def cached_load_benchmark(price_col: str) -> pd.Series:
     return load_benchmark(price_col)
+
+
+@st.cache_data(show_spinner="Loading gold price history...")
+def cached_load_gold(price_col: str) -> pd.Series:
+    return load_gold_series(price_col)
 
 
 @st.cache_data(show_spinner="Loading point-in-time membership calendar...")
@@ -88,6 +94,38 @@ with st.sidebar:
             f"exits once its rank falls below {exit_rank_preview}."
         )
 
+    use_regime_filter = st.checkbox(
+        "GOLDBEES defensive rotation", value=False,
+        help="Optional regime filter. At each rebalance: while running the momentum "
+             "portfolio, if GOLDBEES's trailing return beats the Nifty 500's over the "
+             "entry lookback, switch the ENTIRE portfolio to GOLDBEES. While in GOLDBEES, "
+             "switch back to the momentum portfolio once the Nifty 500's trailing return "
+             "beats GOLDBEES's over the (shorter) exit lookback. Uses GOLDBEES (Nippon "
+             "India ETF Gold BeES) as the actual investable gold instrument, not a spot "
+             "gold index."
+    )
+    gold_entry_lookback = 150
+    gold_exit_lookback = 55
+    if use_regime_filter:
+        gold_entry_lookback = st.number_input(
+            "GOLDBEES entry lookback (months)", min_value=1, max_value=200, value=150, step=1,
+            help="Trailing-return period compared between Nifty 500 and GOLDBEES to decide "
+                 "whether to switch INTO GOLDBEES."
+        )
+        gold_exit_lookback = st.number_input(
+            "GOLDBEES exit lookback (months)", min_value=1, max_value=200, value=55, step=1,
+            help="Trailing-return period compared between Nifty 500 and GOLDBEES to decide "
+                 "whether to switch BACK to the momentum portfolio."
+        )
+        st.caption(
+            "Note: GOLDBEES data starts 2009-01-02, so the entry check (needing "
+            f"{gold_entry_lookback} months of gold history) can't produce a signal until "
+            "roughly that many months after gold's inception -- expect this filter to be "
+            "inactive for the earlier years of the backtest. Also, the cost/tax simulation "
+            "below charges the equity-side cost of liquidating/rebuilding the stock "
+            "portfolio around a gold rotation, but not the gold ETF leg's own cost or tax."
+        )
+
     st.header("Universe & data")
     price_col = st.selectbox("Price field", ["Adj Close", "Close"], index=0)
     min_price = st.number_input("Minimum price filter (Rs)", min_value=0.0, value=10.0, step=5.0)
@@ -130,12 +168,15 @@ if use_membership_filter:
         tuple(monthly_prices.index.values), tuple(monthly_prices.columns)
     )
 
+bench_px = cached_load_benchmark(price_col)
+gold_px = cached_load_gold(price_col) if use_regime_filter else None
+
 strat_rets, holdings_history = run_backtest(
     monthly_prices, membership, lookback_months, skip_months, hold_months, n_stocks, min_price,
     use_exit_band, exit_band_pct,
+    use_regime_filter, bench_px, gold_px, gold_entry_lookback, gold_exit_lookback,
 )
 
-bench_px = cached_load_benchmark(price_col)
 bench_rets = bench_px.pct_change().reindex(strat_rets.index).dropna()
 strat_rets = strat_rets.reindex(bench_rets.index)
 
@@ -295,6 +336,21 @@ else:
             mime="text/csv",
         )
 
+    if use_regime_filter and holdings_history:
+        with st.expander("GOLDBEES regime timeline"):
+            segments = []
+            seg_start, seg_regime = holdings_history[0][0], (holdings_history[0][1] == ["GOLD"])
+            for date, holdings in holdings_history[1:]:
+                is_gold = holdings == ["GOLD"]
+                if is_gold != seg_regime:
+                    segments.append((seg_start, date, "GOLDBEES" if seg_regime else "Momentum"))
+                    seg_start, seg_regime = date, is_gold
+            segments.append((seg_start, holdings_history[-1][0], "GOLDBEES" if seg_regime else "Momentum"))
+            seg_df = pd.DataFrame(segments, columns=["start", "last_rebalance", "regime"])
+            n_switches = sum(1 for s in segments if s[2] == "GOLDBEES")
+            st.caption(f"{n_switches} switch(es) into GOLDBEES over the backtest period.")
+            st.dataframe(seg_df, hide_index=True, height=250)
+
     if cost_tax_result is not None:
         with st.expander("Trade log (costs & taxes)"):
             trades = cost_tax_result["closed_trades"].copy()
@@ -328,8 +384,12 @@ else:
         st.subheader("Current holdings")
         if holdings_history:
             last_date, last_holdings = holdings_history[-1]
-            st.caption(f"As of {last_date.date()} ({len(last_holdings)} stocks, equal-weighted)")
-            st.dataframe(pd.DataFrame({"Symbol": last_holdings}), hide_index=True, height=300)
+            if last_holdings == ["GOLD"]:
+                st.caption(f"As of {last_date.date()}")
+                st.info("Currently in the **gold defensive regime** -- 100% GOLDBEES, no individual stocks held.")
+            else:
+                st.caption(f"As of {last_date.date()} ({len(last_holdings)} stocks, equal-weighted)")
+                st.dataframe(pd.DataFrame({"Symbol": last_holdings}), hide_index=True, height=300)
         else:
             st.caption("No rebalance has occurred yet with these parameters.")
 

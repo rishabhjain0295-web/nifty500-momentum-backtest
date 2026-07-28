@@ -28,6 +28,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent
 STOCKS_DIR = ROOT / "data" / "stocks"
 INDEX_DIR = ROOT / "data" / "index"
+ETF_DIR = ROOT / "data" / "etfs"
 MEMBERSHIP_CSV = ROOT / "data" / "nifty500_membership_calendar.csv"
 
 # data/stocks/ is too large (300MB+) to commit to git -- it's fetched from a
@@ -87,6 +88,16 @@ def load_benchmark(price_col: str = "Adj Close") -> pd.Series:
     return s.resample("ME").last()
 
 
+def load_gold_series(price_col: str = "Adj Close") -> pd.Series:
+    """GOLDBEES (Nippon India ETF Gold BeES) as a proxy for domestic INR gold
+    prices -- an actual investable instrument, unlike a USD gold index."""
+    f = ETF_DIR / "GOLDBEES.csv"
+    df = pd.read_csv(f, index_col=0, parse_dates=True)
+    col = price_col if price_col in df.columns else "Close"
+    s = df[col].dropna().sort_index()
+    return s.resample("ME").last()
+
+
 def load_membership_matrix(dates: pd.DatetimeIndex, symbols: pd.Index) -> pd.DataFrame:
     """Boolean (date x symbol) matrix: was `symbol` a Nifty 500 constituent as of `date`."""
     cal = pd.read_csv(MEMBERSHIP_CSV, parse_dates=["start", "end"])
@@ -114,6 +125,11 @@ def run_backtest(
     min_price: float = 10.0,
     use_exit_band: bool = False,
     exit_band_pct: float = 0.0,
+    use_regime_filter: bool = False,
+    nifty500_index: pd.Series | None = None,
+    gold_series: pd.Series | None = None,
+    gold_entry_lookback: int = 150,
+    gold_exit_lookback: int = 55,
 ) -> tuple[pd.Series, list[tuple[pd.Timestamp, list[str]]]]:
     """Returns (monthly portfolio returns, [(rebalance_date, holdings), ...]).
 
@@ -125,27 +141,68 @@ def run_backtest(
     a stock hovering near the cutoff stay put instead of round-tripping in
     and out on every rebalance. exit_band_pct=0 (or use_exit_band=False)
     reproduces the plain top-N-in/top-N-out behavior exactly.
+
+    Regime filter (use_regime_filter=True, requires nifty500_index and
+    gold_series): at each rebalance, while in the "momentum" regime, compare
+    the Nifty 500 index's trailing gold_entry_lookback-month return to
+    gold's. If gold's is higher, switch to a "gold" regime -- the entire
+    portfolio becomes gold (a synthetic "GOLD" position; no individual
+    stocks held) until, at a later rebalance, the Nifty 500's trailing
+    gold_exit_lookback-month return exceeds gold's, switching back to
+    momentum. A synthetic "GOLD" entry in holdings_history isn't a real
+    monthly_prices symbol, so cost/tax simulation (tax_cost_engine.py)
+    silently skips it -- only the equity leg's costs/taxes are modeled.
     """
     min_history_months = lookback_months + skip_months + 1
     monthly_rets = monthly_prices.pct_change()
     dates = monthly_prices.index
 
+    gold_rets = nifty_trail_entry = gold_trail_entry = nifty_trail_exit = gold_trail_exit = None
+    if use_regime_filter and nifty500_index is not None and gold_series is not None:
+        nifty_aligned = nifty500_index.reindex(dates)
+        gold_aligned = gold_series.reindex(dates)
+        gold_rets = gold_aligned.pct_change()
+        nifty_trail_entry = nifty_aligned / nifty_aligned.shift(gold_entry_lookback) - 1
+        gold_trail_entry = gold_aligned / gold_aligned.shift(gold_entry_lookback) - 1
+        nifty_trail_exit = nifty_aligned / nifty_aligned.shift(gold_exit_lookback) - 1
+        gold_trail_exit = gold_aligned / gold_aligned.shift(gold_exit_lookback) - 1
+
     portfolio_rets = pd.Series(index=dates, dtype=float)
     holdings_history: list[tuple[pd.Timestamp, list[str]]] = []
     current_holdings: list[str] = []
+    regime = "momentum"
     months_held = 0
 
     for i in range(min_history_months, len(dates)):
         today = dates[i]
+        holding_something = bool(current_holdings) or regime == "gold"
 
-        if current_holdings:
-            realized = monthly_rets.loc[today, current_holdings].mean()
-            portfolio_rets.loc[today] = realized
+        if regime == "gold":
+            r = gold_rets.loc[today] if gold_rets is not None else np.nan
+            portfolio_rets.loc[today] = r if pd.notna(r) else 0.0
+        elif current_holdings:
+            portfolio_rets.loc[today] = monthly_rets.loc[today, current_holdings].mean()
         else:
             portfolio_rets.loc[today] = 0.0
 
         months_held += 1
-        if months_held < hold_months and current_holdings:
+        if months_held < hold_months and holding_something:
+            continue
+
+        if nifty_trail_entry is not None:
+            if regime == "momentum":
+                n150, g150 = nifty_trail_entry.loc[today], gold_trail_entry.loc[today]
+                if pd.notna(n150) and pd.notna(g150) and g150 > n150:
+                    regime = "gold"
+            elif regime == "gold":
+                n55, g55 = nifty_trail_exit.loc[today], gold_trail_exit.loc[today]
+                if pd.notna(n55) and pd.notna(g55) and n55 > g55:
+                    regime = "momentum"
+
+        if regime == "gold":
+            current_holdings = []
+            holdings_history.append((today, ["GOLD"]))
+            months_held = 0
             continue
 
         end_idx = i - skip_months
@@ -238,6 +295,9 @@ def run_full_backtest(
     use_membership_filter: bool = True,
     use_exit_band: bool = False,
     exit_band_pct: float = 0.0,
+    use_regime_filter: bool = False,
+    gold_entry_lookback: int = 150,
+    gold_exit_lookback: int = 55,
 ):
     """End-to-end: load data, run strategy, align to benchmark. Returns a dict."""
     monthly_prices = load_prices(price_col)
@@ -245,12 +305,15 @@ def run_full_backtest(
     if use_membership_filter:
         membership = load_membership_matrix(monthly_prices.index, monthly_prices.columns)
 
+    bench_px = load_benchmark(price_col)
+    gold_px = load_gold_series(price_col) if use_regime_filter else None
+
     strat_rets, holdings_history = run_backtest(
         monthly_prices, membership, lookback_months, skip_months, hold_months, n_stocks, min_price,
         use_exit_band, exit_band_pct,
+        use_regime_filter, bench_px, gold_px, gold_entry_lookback, gold_exit_lookback,
     )
 
-    bench_px = load_benchmark(price_col)
     bench_rets = bench_px.pct_change().reindex(strat_rets.index).dropna()
     strat_rets = strat_rets.reindex(bench_rets.index)
 
