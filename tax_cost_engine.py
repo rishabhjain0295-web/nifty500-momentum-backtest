@@ -37,6 +37,8 @@ Position sizing for tax purposes uses the *actual* post-cost-and-tax capital
 path (nav_net), so a realistic amount of capital compounds forward after
 each cost/tax deduction, rather than an idealized gross curve.
 """
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 import pandas as pd

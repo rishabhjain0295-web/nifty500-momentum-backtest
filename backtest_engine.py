@@ -20,6 +20,8 @@ historical names unresolved to a live ticker).
 Plain pandas implementation -- no lookahead-safe execution-cost modeling,
 no slippage. Ignores dividends unless price_col is 'Adj Close'.
 """
+from __future__ import annotations
+
 from pathlib import Path
 
 import numpy as np
