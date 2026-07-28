@@ -86,16 +86,8 @@ def simulate_costs_and_taxes(
     tax: TaxParams,
 ) -> dict:
     dates = strat_rets.index
-    monthly_rets = monthly_prices.pct_change()
     holdings_by_date = dict(holdings_history)
     rebalance_dates = set(holdings_by_date.keys())
-
-    active_holdings = []
-    current: list[str] = []
-    for d in dates:
-        if d in holdings_by_date:
-            current = holdings_by_date[d]
-        active_holdings.append(list(current))
 
     buy_cost_pct = cost.buy_cost_pct
     sell_cost_pct = cost.sell_cost_pct
@@ -140,12 +132,11 @@ def simulate_costs_and_taxes(
         return tax_owed * (1 + tax.cess_pct / 100)
 
     for i, d in enumerate(dates):
-        holdings = active_holdings[i]
-        if holdings:
-            r = monthly_rets.loc[d, holdings].mean()
-            if pd.isna(r):
-                r = 0.0
-        else:
+        # Reuse the already-correct blended return from run_backtest (handles
+        # both the stock basket and the synthetic "GOLD" regime -- which has
+        # no column in monthly_prices, so it can't be recomputed here).
+        r = strat_rets.loc[d]
+        if pd.isna(r):
             r = 0.0
         nav_net *= (1 + r)
         nav_post_cost *= (1 + r)
