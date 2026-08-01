@@ -15,6 +15,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from backtest_engine import (
+    build_trade_log,
     ensure_stock_data,
     load_benchmark,
     load_gold_series,
@@ -364,6 +365,43 @@ else:
             n_switches = sum(1 for s in segments if s[2] == "GOLDBEES")
             st.caption(f"{n_switches} switch(es) into GOLDBEES over the backtest period.")
             st.dataframe(seg_df, hide_index=True, height=250)
+
+    st.subheader("All trades")
+    st.caption(
+        "Every entry/exit the strategy took, reconstructed as discrete buy/sell orders "
+        "(qty sized at 1/N of portfolio value on entry, held until exit). Independent of "
+        "the cost/tax settings above -- this is a plain summary of strategy activity. "
+        "Still-open positions at the end of the backtest are marked unrealized."
+    )
+    trade_log_capital = st.number_input(
+        "Portfolio size for quantity sizing (Rs)", min_value=100_000.0, value=1_000_000.0,
+        step=100_000.0, key="trade_log_capital",
+    )
+    trade_log = build_trade_log(monthly_prices, strat_rets, holdings_history, n_stocks, trade_log_capital)
+    if trade_log.empty:
+        st.caption("No trades yet with these parameters.")
+    else:
+        n_closed = (trade_log["status"] == "closed").sum()
+        n_open = (trade_log["status"] == "open").sum()
+        realized_pnl = trade_log.loc[trade_log["status"] == "closed", "pnl_rs"].sum()
+        unrealized_pnl = trade_log.loc[trade_log["status"] == "open", "pnl_rs"].sum()
+        st.markdown(
+            f"**{n_closed} closed** trades (realized P&L: Rs {realized_pnl:,.0f})  |  "
+            f"**{n_open} open** positions (unrealized P&L: Rs {unrealized_pnl:,.0f})"
+        )
+        st.dataframe(
+            trade_log.sort_values("entry_date", ascending=False).style.format({
+                "entry_price": "{:.2f}", "exit_price": "{:.2f}", "qty": "{:.1f}",
+                "pnl_rs": "Rs {:,.0f}", "pnl_pct": "{:.2%}",
+            }),
+            hide_index=True, height=400,
+        )
+        st.download_button(
+            "Download all trades as CSV",
+            trade_log.to_csv(index=False).encode("utf-8"),
+            file_name="all_trades.csv",
+            mime="text/csv",
+        )
 
     if cost_tax_result is not None:
         with st.expander("Trade log (costs & taxes)"):

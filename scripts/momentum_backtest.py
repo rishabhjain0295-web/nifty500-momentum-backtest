@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from backtest_engine import run_full_backtest, yearly_table  # noqa: E402
+from backtest_engine import build_trade_log, run_full_backtest, yearly_table  # noqa: E402
 
 # ---- strategy parameters ----
 PRICE_COL = "Adj Close"       # or "Close"
@@ -72,6 +72,15 @@ def main():
     yearly_path = ROOT / "data" / "momentum_backtest_yearly.csv"
     yt.to_csv(yearly_path)
     print(f"Saved year-wise results to {yearly_path}")
+
+    trade_log = build_trade_log(
+        result["monthly_prices"], result["strategy_returns"], result["holdings_history"], N_STOCKS
+    )
+    trades_path = ROOT / "data" / "momentum_backtest_trades.csv"
+    trade_log.to_csv(trades_path, index=False)
+    n_closed = (trade_log["status"] == "closed").sum()
+    n_open = (trade_log["status"] == "open").sum()
+    print(f"Saved {n_closed} closed + {n_open} open trades to {trades_path}")
 
 
 if __name__ == "__main__":

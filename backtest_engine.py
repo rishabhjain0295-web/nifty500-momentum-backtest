@@ -307,6 +307,90 @@ def perf_stats(rets: pd.Series, freq: int = 12) -> dict:
     }
 
 
+def build_trade_log(
+    monthly_prices: pd.DataFrame,
+    strat_rets: pd.Series,
+    holdings_history: list[tuple[pd.Timestamp, list[str]]],
+    n_stocks: int,
+    capital_base_rs: float = 1_000_000.0,
+) -> pd.DataFrame:
+    """Reconstructs discrete buy/sell trades (entry/exit date, price, qty,
+    P&L) from the rebalance holdings history.
+
+    Every position is sized as if bought outright at 1/n_stocks of portfolio
+    NAV on the date it enters the basket, held at that fixed share count
+    until it exits, then sold -- this is the natural "quantity" concept for
+    a trade blotter, so it's used here regardless of which weighting_mode
+    (see run_backtest) generated the return curve: even under "equal_monthly"
+    weighting, a real trader can't literally re-buy/re-sell fractional
+    amounts every month for free, so a trade log has to describe discrete
+    orders. Position sizing uses the GROSS (pre-cost, pre-tax) equity curve,
+    independent of tax_cost_engine.py -- this is a plain summary of what the
+    strategy did, not a costed simulation.
+
+    Includes still-open positions at the end of the backtest as unrealized
+    (status="open"), marked to the last available price.
+
+    The "GOLD" synthetic regime marker (see run_backtest) has no entry/exit
+    price in monthly_prices and is excluded from this log.
+    """
+    nav = (1 + strat_rets).cumprod()
+    open_positions: dict[str, tuple] = {}  # symbol -> (entry_date, entry_price, entry_nav, entry_n_active)
+    trades = []
+    prev_holdings: set[str] = set()
+
+    for date, holdings in holdings_history:
+        new_holdings = set(holdings) - {"GOLD"}
+        equity_prev = prev_holdings - {"GOLD"}
+        added = new_holdings - equity_prev
+        dropped = equity_prev - new_holdings
+        n_active = len(new_holdings) if new_holdings else n_stocks
+        nav_at_date = nav.loc[date] if date in nav.index else None
+
+        for sym in dropped:
+            entry_date, entry_price, entry_nav, entry_n_active = open_positions.pop(sym)
+            exit_price = monthly_prices.loc[date, sym] if sym in monthly_prices.columns else None
+            if exit_price is None or pd.isna(exit_price):
+                continue
+            position_value = (entry_nav / entry_n_active) * capital_base_rs
+            qty = position_value / entry_price
+            trades.append({
+                "symbol": sym, "entry_date": entry_date, "entry_price": entry_price,
+                "exit_date": date, "exit_price": exit_price, "qty": qty,
+                "pnl_rs": qty * (exit_price - entry_price), "pnl_pct": exit_price / entry_price - 1,
+                "hold_days": (date - entry_date).days, "status": "closed",
+            })
+
+        if nav_at_date is not None:
+            for sym in added:
+                entry_price = monthly_prices.loc[date, sym] if sym in monthly_prices.columns else None
+                if entry_price is None or pd.isna(entry_price):
+                    continue
+                open_positions[sym] = (date, entry_price, nav_at_date, n_active)
+
+        prev_holdings = new_holdings
+
+    last_date = monthly_prices.index[-1]
+    for sym, (entry_date, entry_price, entry_nav, entry_n_active) in open_positions.items():
+        px_series = monthly_prices[sym].dropna() if sym in monthly_prices.columns else pd.Series(dtype=float)
+        if px_series.empty:
+            continue
+        last_price = px_series.iloc[-1]
+        position_value = (entry_nav / entry_n_active) * capital_base_rs
+        qty = position_value / entry_price
+        trades.append({
+            "symbol": sym, "entry_date": entry_date, "entry_price": entry_price,
+            "exit_date": pd.NaT, "exit_price": last_price, "qty": qty,
+            "pnl_rs": qty * (last_price - entry_price), "pnl_pct": last_price / entry_price - 1,
+            "hold_days": (last_date - entry_date).days, "status": "open",
+        })
+
+    if not trades:
+        return pd.DataFrame(columns=["symbol", "entry_date", "entry_price", "exit_date",
+                                      "exit_price", "qty", "pnl_rs", "pnl_pct", "hold_days", "status"])
+    return pd.DataFrame(trades).sort_values("entry_date").reset_index(drop=True)
+
+
 def annual_returns(rets: pd.Series) -> pd.Series:
     """Compounded return for each calendar year present in `rets`."""
     return (1 + rets).groupby(rets.index.year).apply(lambda x: x.prod() - 1)
