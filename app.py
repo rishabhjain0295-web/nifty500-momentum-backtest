@@ -15,9 +15,11 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from backtest_engine import (
+    apply_stoploss,
     build_trade_log,
     ensure_stock_data,
     load_benchmark,
+    load_daily_prices,
     load_gold_series,
     load_membership_matrix,
     load_prices,
@@ -46,6 +48,11 @@ def cached_load_benchmark(price_col: str) -> pd.Series:
 @st.cache_data(show_spinner="Loading gold price history...")
 def cached_load_gold(price_col: str) -> pd.Series:
     return load_gold_series(price_col)
+
+
+@st.cache_data(show_spinner="Loading daily price history for stoploss simulation...")
+def cached_load_daily_prices(price_col: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    return load_daily_prices(price_col)
 
 
 @st.cache_data(show_spinner="Loading point-in-time membership calendar...")
@@ -89,6 +96,32 @@ with st.sidebar:
              "resets everyone -- this is how real equal-weight index funds/ETFs actually work."
     )
     weighting_mode = "equal_monthly" if weighting_label == "Equal weight every month" else "drift"
+
+    use_stoploss = st.checkbox(
+        "Per-stock stoploss", value=False,
+        help="Optional daily-level risk control, independent of the rebalancing period. Each "
+             "stock is bought at its rebalance-day close; on any later trading day its close "
+             "falls to stoploss% below where it was bought, it's sold that same close and the "
+             "slot holds cash. New stocks are only ever added at the next scheduled rebalance -- "
+             "a stopped-out slot doesn't get replaced with a different stock mid-period. "
+             "Requires daily price data (a bit slower to compute) and always uses discrete "
+             "per-stock entry/exit tracking, overriding the weighting method above for pricing "
+             "purposes while it's on."
+    )
+    stoploss_pct = 10.0
+    max_reentries = 0
+    if use_stoploss:
+        stoploss_pct = st.slider(
+            "Stoploss (% below buy price)", min_value=1.0, max_value=50.0, value=10.0, step=1.0,
+        )
+        max_reentries = st.slider(
+            "Number of re-entries allowed", min_value=0, max_value=5, value=0, step=1,
+            help="0 = once stopped out, the slot stays in cash for the rest of the holding "
+                 "period. N > 0: after a stop, if the SAME stock's close later rises back above "
+                 "its original buy price for this holding period, it's bought again at the "
+                 "next day's open (a fresh stoploss is set from that new price) -- up to N "
+                 "times per holding period."
+        )
 
     use_exit_band = st.checkbox(
         "Custom exit criteria", value=False,
@@ -158,6 +191,12 @@ with st.sidebar:
              "(with loss carryforward) on every trade implied by the rebalances above. "
              "Approximate -- not tax advice."
     )
+    if apply_costs_taxes and use_stoploss:
+        st.caption(
+            "Note: this cost/tax simulation only sees rebalance-level entries/exits, not the "
+            "intra-period stops and re-entries the stoploss overlay adds to the return curve -- "
+            "so it under-counts real trading costs/tax events while stoploss is on."
+        )
     with st.expander("Cost & tax assumptions", expanded=False):
         capital_base = st.number_input(
             "Capital base (Rs)", min_value=100_000.0, value=1_000_000.0, step=100_000.0,
@@ -191,6 +230,15 @@ strat_rets, holdings_history = run_backtest(
     use_regime_filter, bench_px, gold_px, gold_entry_lookback, gold_exit_lookback,
     weighting_mode,
 )
+
+if use_stoploss:
+    daily_close, daily_open = cached_load_daily_prices(price_col)
+    stoploss_overlay = apply_stoploss(
+        monthly_prices, daily_close, daily_open, holdings_history, stoploss_pct, max_reentries
+    )
+    for m_date, r in stoploss_overlay.items():
+        if m_date in strat_rets.index:
+            strat_rets.loc[m_date] = r
 
 bench_rets = bench_px.pct_change().reindex(strat_rets.index).dropna()
 strat_rets = strat_rets.reindex(bench_rets.index)
@@ -373,6 +421,14 @@ else:
         "the cost/tax settings above -- this is a plain summary of strategy activity. "
         "Still-open positions at the end of the backtest are marked unrealized."
     )
+    if use_stoploss:
+        st.warning(
+            "Stoploss is on, but this table still only reflects REBALANCE-level entries/exits "
+            "(one row per stock per holding period) -- it does not yet break out the intra-period "
+            "stop-outs and re-entries the stoploss overlay simulates for the return curve above. "
+            "The equity curve and performance stats above do already include that activity; this "
+            "trade log's P&L for a period spanning a stop-out just won't match it."
+        )
     trade_log_capital = st.number_input(
         "Portfolio size for quantity sizing (Rs)", min_value=100_000.0, value=1_000_000.0,
         step=100_000.0, key="trade_log_capital",

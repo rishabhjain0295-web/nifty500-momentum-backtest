@@ -23,6 +23,9 @@ USE_MEMBERSHIP_FILTER = True
 USE_EXIT_BAND = False    # turnover-reduction: keep a held stock until its rank falls below N*(1+EXIT_BAND_PCT/100)
 EXIT_BAND_PCT = 0.0
 WEIGHTING_MODE = "equal_monthly"    # or "drift" -- see run_backtest docstring in backtest_engine.py
+USE_STOPLOSS = False     # per-stock daily stoploss, see apply_stoploss docstring in backtest_engine.py
+STOPLOSS_PCT = 10.0
+MAX_REENTRIES = 0
 
 
 def main():
@@ -38,6 +41,9 @@ def main():
         use_exit_band=USE_EXIT_BAND,
         exit_band_pct=EXIT_BAND_PCT,
         weighting_mode=WEIGHTING_MODE,
+        use_stoploss=USE_STOPLOSS,
+        stoploss_pct=STOPLOSS_PCT,
+        max_reentries=MAX_REENTRIES,
     )
 
     mp = result["monthly_prices"]

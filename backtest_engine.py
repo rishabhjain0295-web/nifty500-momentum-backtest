@@ -82,6 +82,36 @@ def load_prices(price_col: str = "Adj Close") -> pd.DataFrame:
     return wide.resample("ME").last()
 
 
+def load_daily_prices(price_col: str = "Adj Close") -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Loads daily close (price_col) and daily open prices, WITHOUT resampling
+    to monthly. Only used by the stoploss/re-entry overlay (apply_stoploss),
+    which needs day-by-day granularity that the rest of the engine discards
+    by working in monthly_prices. Note Open is raw (not split/dividend
+    adjusted the way Adj Close is) -- a minor inconsistency around corporate
+    actions when price_col='Adj Close', not corrected for here."""
+    close_frames = {}
+    open_frames = {}
+    for f in STOCKS_DIR.glob("*.csv"):
+        sym = f.stem
+        try:
+            df = pd.read_csv(f, index_col=0, parse_dates=True)
+        except Exception:
+            continue
+        if price_col not in df.columns or "Open" not in df.columns or df.empty:
+            continue
+        c = df[price_col].dropna()
+        o = df["Open"].dropna()
+        if c.empty or o.empty:
+            continue
+        close_frames[sym] = c
+        open_frames[sym] = o
+    if not close_frames:
+        raise RuntimeError(f"No usable daily price data found in {STOCKS_DIR}")
+    daily_close = pd.DataFrame(close_frames).sort_index()
+    daily_open = pd.DataFrame(open_frames).sort_index()
+    return daily_close, daily_open
+
+
 def load_benchmark(price_col: str = "Adj Close") -> pd.Series:
     f = INDEX_DIR / "NIFTY500.csv"
     df = pd.read_csv(f, index_col=0, parse_dates=True)
@@ -289,6 +319,118 @@ def run_backtest(
     return portfolio_rets.dropna(), holdings_history
 
 
+def apply_stoploss(
+    monthly_prices: pd.DataFrame,
+    daily_close: pd.DataFrame,
+    daily_open: pd.DataFrame,
+    holdings_history: list[tuple[pd.Timestamp, list[str]]],
+    stoploss_pct: float,
+    max_reentries: int,
+) -> dict[pd.Timestamp, float]:
+    """Re-simulates portfolio returns at daily granularity for every
+    momentum-regime holding period in holdings_history (GOLD-regime periods
+    are left untouched by the caller -- this only returns values for months
+    it actually recomputed), applying a per-stock stoploss with optional
+    re-entry:
+
+      - Each stock slot is bought at the rebalance date's close (taken from
+        monthly_prices, the same value the momentum ranking already used --
+        not re-derived from daily_close, which can have a different last
+        trading day than the "ME" period-end label).
+      - Each subsequent trading day, if held and that day's close is <=
+        entry_price * (1 - stoploss_pct/100), the position is stopped out
+        at that close; the slot then holds cash (0 return) for following
+        days.
+      - While in cash, if re-entries remain (reentry_count < max_reentries)
+        and a day's close rises back above the ORIGINAL entry price for
+        this holding period (a fixed reference -- not the post-stop price,
+        and not reset by earlier re-entries), the slot re-enters at the
+        *next* trading day's open. A fresh stoploss is set from this new
+        entry price (each re-entry gets its own stop, anchored to what was
+        actually paid).
+      - Once re-entries are exhausted, the slot stays in cash for the rest
+        of the holding period.
+
+    Every held stock is weighted 1/n_stocks (whatever "n_stocks" the period
+    actually held, matching exit-band survivor counts if applicable) --
+    this always uses per-stock discrete entry/exit tracking, i.e. "drift"-
+    style position sizing, regardless of the separately-selectable
+    weighting_mode: a stoploss fundamentally requires knowing what price a
+    stock was actually bought at, which "equal_monthly" (reset to equal
+    weight every month) doesn't preserve.
+
+    Returns {month_end_date: return} for the recomputed months only. The
+    caller merges this into the baseline portfolio_rets from run_backtest,
+    leaving GOLD-regime and pre-first-rebalance months unchanged.
+    """
+    stop_frac = stoploss_pct / 100.0
+    monthly_result: dict[pd.Timestamp, float] = {}
+    last_daily_date = daily_close.index.max()
+
+    for idx in range(len(holdings_history)):
+        start_date, holdings = holdings_history[idx]
+        if holdings == ["GOLD"]:
+            continue
+        end_date = holdings_history[idx + 1][0] if idx + 1 < len(holdings_history) else last_daily_date
+
+        symbols = [s for s in holdings if s in monthly_prices.columns and s in daily_close.columns]
+        n = len(symbols)
+        if n == 0:
+            continue
+
+        period_dates = daily_close.index[(daily_close.index > start_date) & (daily_close.index <= end_date)]
+        if len(period_dates) == 0:
+            continue
+        daily_port_ret = pd.Series(0.0, index=period_dates)
+
+        for sym in symbols:
+            entry_price = monthly_prices.loc[start_date, sym]
+            if pd.isna(entry_price) or entry_price <= 0:
+                continue
+            initial_entry_price = entry_price
+
+            close = daily_close[sym].reindex(period_dates)
+            open_ = daily_open[sym].reindex(period_dates)
+
+            in_stock = True
+            reentry_count = 0
+            pending_reentry = False
+            prev_price = entry_price
+
+            for d_i, d in enumerate(period_dates):
+                px_close = close.iloc[d_i]
+                if pd.isna(px_close):
+                    continue
+
+                if pending_reentry:
+                    px_open = open_.iloc[d_i]
+                    pending_reentry = False
+                    if pd.notna(px_open) and px_open > 0:
+                        entry_price = px_open
+                        in_stock = True
+                        daily_port_ret.loc[d] += (px_close / px_open - 1) / n
+                        prev_price = px_close
+                    continue
+
+                if in_stock:
+                    if pd.notna(prev_price) and prev_price > 0:
+                        daily_port_ret.loc[d] += (px_close / prev_price - 1) / n
+                    if px_close <= entry_price * (1 - stop_frac):
+                        in_stock = False
+                    prev_price = px_close
+                else:
+                    if reentry_count < max_reentries and px_close > initial_entry_price:
+                        pending_reentry = True
+                        reentry_count += 1
+                    prev_price = px_close
+
+        monthly_from_daily = (1 + daily_port_ret).resample("ME").prod() - 1
+        for m_date, r in monthly_from_daily.items():
+            monthly_result[m_date] = r
+
+    return monthly_result
+
+
 def perf_stats(rets: pd.Series, freq: int = 12) -> dict:
     cum = (1 + rets).cumprod()
     n_years = len(rets) / freq
@@ -429,6 +571,9 @@ def run_full_backtest(
     gold_entry_lookback: int = 150,
     gold_exit_lookback: int = 55,
     weighting_mode: str = "equal_monthly",
+    use_stoploss: bool = False,
+    stoploss_pct: float = 10.0,
+    max_reentries: int = 0,
 ):
     """End-to-end: load data, run strategy, align to benchmark. Returns a dict."""
     monthly_prices = load_prices(price_col)
@@ -445,6 +590,15 @@ def run_full_backtest(
         use_regime_filter, bench_px, gold_px, gold_entry_lookback, gold_exit_lookback,
         weighting_mode,
     )
+
+    if use_stoploss:
+        daily_close, daily_open = load_daily_prices(price_col)
+        overlay = apply_stoploss(
+            monthly_prices, daily_close, daily_open, holdings_history, stoploss_pct, max_reentries
+        )
+        for m_date, r in overlay.items():
+            if m_date in strat_rets.index:
+                strat_rets.loc[m_date] = r
 
     bench_rets = bench_px.pct_change().reindex(strat_rets.index).dropna()
     strat_rets = strat_rets.reindex(bench_rets.index)
