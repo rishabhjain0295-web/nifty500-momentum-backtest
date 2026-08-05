@@ -25,6 +25,30 @@ almost certainly genuinely delisted/merged/liquidated companies with no
 current tradable ticker, which is a real, unavoidable data gap (not a bug
 in this script).
 
+Symbol-rename canonicalization (build_symbol_canonicalizer): Wayback
+snapshots record whatever symbol was live on that date (e.g. Motherson
+Sumi Systems traded as MOTHERSUMI through 2022-06-09, then MOTHERSON
+after). Snapshot comparisons -- both the consecutive-snapshot diff and the
+reconcile_against_earliest_snapshot() check below -- canonicalize every
+symbol to its current equivalent first via symbolchange.csv's rename chain,
+so a rename never looks like an exclusion+new-inclusion or wrongly closes
+a still-open interval.
+
+Known residual gap: corporate demergers, where the SPINOFF keeps the
+parent's exact legal name while the continuing listed entity is renamed to
+something else (e.g. Tata Motors' Nov-2025 commercial-vehicles demerger:
+the new "TMCV" inherited the name "Tata Motors Limited", while the
+continuing passenger-vehicle business, still trading, was renamed "Tata
+Motors Passenger Vehicles Ltd" / symbol TMPV). Exact-name resolution has
+no way to know this from company names alone -- it would need pre-2020
+ISIN history we don't have. reconcile_against_earliest_snapshot() catches
+the worst consequence (an ancient scrip name incorrectly claiming a
+multi-decade-old inclusion for a security that didn't exist yet), and the
+backtest's own price-data eligibility check (no price history = not
+eligible) prevents it from causing an actual wrong stock pick -- but the
+calendar interval itself can still show a cosmetically bogus early start
+date for the spinoff's symbol in this situation.
+
 Outputs:
   data/nifty500_membership_events.csv    -- resolved (date, symbol, action) events
   data/nifty500_membership_calendar.csv  -- collapsed (symbol, start_date, end_date) intervals
@@ -40,7 +64,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 SNAP_DIR = DATA / "membership_snapshots"
 
-TODAY = pd.Timestamp("2026-07-25")  # fixed to avoid Date.now()-style nondeterminism
+TODAY = pd.Timestamp("2026-08-05")  # fixed to avoid Date.now()-style nondeterminism -- bump this each time nifty500_list.csv is refreshed and the calendar rebuilt
 
 
 def normalize(name: str) -> str:
@@ -84,6 +108,55 @@ def load_name_resolver():
     return mapping
 
 
+def build_symbol_canonicalizer() -> dict:
+    """Maps every symbol a security has EVER traded under to its single
+    current/latest symbol, by unioning old_symbol<->new_symbol pairs from
+    symbolchange.csv (chained renames handled via union-find). Needed
+    because Wayback snapshots record whatever symbol was live on that date
+    -- e.g. Motherson Sumi Systems traded as MOTHERSUMI through 2022-06-09,
+    then MOTHERSON after. Without canonicalizing, a straight symbol-string
+    comparison between an old snapshot and current data wrongly looks like
+    an exclusion+new-inclusion instead of one continuous holding, and
+    reconcile_against_earliest_snapshot() would wrongly close a still-open
+    interval for any such security whose rename happened after the
+    snapshot it's being checked against.
+    """
+    sc = pd.read_csv(DATA / "symbolchange.csv", header=None,
+                      names=["company_name", "old_symbol", "new_symbol", "date"])
+    em = pd.read_csv(DATA / "equity_master.csv")
+    em.columns = [c.strip() for c in em.columns]
+    active_symbols = set(em["SYMBOL"])
+
+    parent: dict[str, str] = {}
+
+    def find(x):
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for _, row in sc.iterrows():
+        union(row["old_symbol"], row["new_symbol"])
+
+    groups: dict[str, set] = {}
+    for s in list(parent.keys()):
+        groups.setdefault(find(s), set()).add(s)
+
+    canon = {}
+    for members in groups.values():
+        active = [m for m in members if m in active_symbols]
+        chosen = active[0] if active else sorted(members)[0]
+        for m in members:
+            canon[m] = chosen
+    return canon
+
+
 def resolve_name(name: str, mapping: dict, all_names: list) -> tuple[str | None, str]:
     norm = normalize(name)
     if norm in mapping:
@@ -109,18 +182,58 @@ def load_xls_events() -> pd.DataFrame:
     return df[["date", "scrip_name", "action"]]
 
 
-def load_snapshot_symbols(path: Path) -> set:
+def load_snapshot_symbols(path: Path, canon: dict | None = None) -> set:
     df = pd.read_csv(path)
     df.columns = [c.strip() for c in df.columns]
     col = "Symbol" if "Symbol" in df.columns else "SYMBOL"
-    return set(df[col].astype(str).str.strip())
+    syms = set(df[col].astype(str).str.strip())
+    if canon:
+        syms = {canon.get(s, s) for s in syms}
+    return syms
 
 
-def build_synthetic_events_from_snapshots() -> pd.DataFrame:
+def reconcile_against_earliest_snapshot(xls_resolved: pd.DataFrame, canon: dict) -> pd.DataFrame:
+    """The official 1998-2020 log occasionally has an exclusion event whose
+    scrip name failed to resolve to a symbol (e.g. an ambiguous/misspelled
+    name at the time, or a name from an era load_name_resolver's mapping
+    doesn't cover) -- when that happens, the matching INCLUSION event is
+    still resolved and the symbol's interval is left permanently "open"
+    (end=NaT), even though the security demonstrably isn't a Nifty 500
+    member by our first ground-truth checkpoint. Confirmed case: GVPIL
+    (GE Power India, née Alstom India) included 2002-03-29 per the xls,
+    absent from every Wayback snapshot from 2020-07-25 onward and from the
+    live current list, with no resolved exclusion event anywhere.
+
+    For any symbol with a net-positive IN/OUT balance from the xls as of
+    the earliest Wayback snapshot date that ISN'T actually a member in that
+    snapshot, insert a synthetic OUT event dated the day before -- closing
+    the dangling interval using verified ground truth instead of leaving it
+    open by default.
+    """
+    snaps = sorted(SNAP_DIR.glob("*.csv"))
+    if not snaps:
+        return pd.DataFrame(columns=["date", "symbol", "action", "source"])
+    earliest_snap_date = pd.Timestamp(snaps[0].stem)
+    earliest_members = load_snapshot_symbols(snaps[0], canon)
+
+    reconciled = []
+    pre_cutoff = xls_resolved[xls_resolved["date"] < earliest_snap_date]
+    for sym, grp in pre_cutoff.sort_values("date").groupby("symbol"):
+        canon_sym = canon.get(sym, sym)
+        balance = grp["action"].map({"IN": 1, "OUT": -1}).sum()
+        if balance > 0 and canon_sym not in earliest_members:
+            reconciled.append({
+                "date": earliest_snap_date - pd.Timedelta(days=1),
+                "symbol": sym, "action": "OUT", "source": "reconciliation_vs_earliest_snapshot",
+            })
+    return pd.DataFrame(reconciled, columns=["date", "symbol", "action", "source"])
+
+
+def build_synthetic_events_from_snapshots(canon: dict) -> pd.DataFrame:
     snaps = sorted(SNAP_DIR.glob("*.csv"))
     # also treat "today" (current live list) as the final checkpoint
-    dated_snaps = [(pd.Timestamp(f.stem), load_snapshot_symbols(f)) for f in snaps]
-    dated_snaps.append((TODAY, load_snapshot_symbols(DATA / "nifty500_list.csv")))
+    dated_snaps = [(pd.Timestamp(f.stem), load_snapshot_symbols(f, canon)) for f in snaps]
+    dated_snaps.append((TODAY, load_snapshot_symbols(DATA / "nifty500_list.csv", canon)))
     dated_snaps.sort(key=lambda x: x[0])
 
     events = []
@@ -179,11 +292,20 @@ def main():
 
     xls_resolved = pd.DataFrame(resolved_rows)
 
+    print("Building symbol-rename canonicalizer (so snapshot comparisons survive symbol changes)...")
+    canon = build_symbol_canonicalizer()
+    print(f"  {len(canon)} historical symbols mapped to their current equivalent")
+
+    print("Reconciling xls-era open intervals against the earliest verified snapshot...")
+    reconciliation_events = reconcile_against_earliest_snapshot(xls_resolved, canon)
+    print(f"  {len(reconciliation_events)} dangling-open interval(s) closed "
+          f"(exclusion event existed but failed to resolve at the time)")
+
     print("Building synthetic post-2020 events from snapshot diffs...")
-    synth_events = build_synthetic_events_from_snapshots()
+    synth_events = build_synthetic_events_from_snapshots(canon)
     print(f"  {len(synth_events)} synthetic events from {len(list(SNAP_DIR.glob('*.csv'))) + 1} checkpoints")
 
-    all_events = pd.concat([xls_resolved, synth_events], ignore_index=True)
+    all_events = pd.concat([xls_resolved, synth_events, reconciliation_events], ignore_index=True)
     all_events = all_events.sort_values(["symbol", "date"]).reset_index(drop=True)
     all_events.to_csv(DATA / "nifty500_membership_events.csv", index=False)
     print(f"Saved {len(all_events)} total resolved events to nifty500_membership_events.csv")

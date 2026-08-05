@@ -2,7 +2,6 @@ date,symbol,action,source
 2013-07-17,20MICRONS,IN,nse_inclexcl
 2013-09-27,20MICRONS,OUT,nse_inclexcl
 2020-06-26,360ONE,IN,nse_inclexcl
-2023-04-04,360ONE,IN,snapshot_diff
 2009-12-22,3IINFOLTD,IN,nse_inclexcl
 2012-09-28,3IINFOLTD,OUT,nse_inclexcl
 2013-06-21,3IINFOLTD,IN,nse_inclexcl
@@ -40,7 +39,6 @@ date,symbol,action,source
 1998-08-01,ABREL,IN,nse_inclexcl
 2018-12-28,ABREL,OUT,nse_inclexcl
 2020-06-26,ABREL,IN,nse_inclexcl
-2026-05-30,ABREL,IN,snapshot_diff
 2022-05-04,ABSLAMC,IN,snapshot_diff
 2023-04-04,ABSLAMC,OUT,snapshot_diff
 2026-05-30,ABSLAMC,IN,snapshot_diff
@@ -55,13 +53,11 @@ date,symbol,action,source
 2026-05-30,ACMESOLAR,IN,snapshot_diff
 2026-05-30,ACUTAAS,IN,snapshot_diff
 2016-04-01,ADANIENSOL,IN,nse_inclexcl
-2024-02-26,ADANIENSOL,IN,snapshot_diff
 1998-08-01,ADANIENT,IN,nse_inclexcl
 2015-05-29,ADANIENT,OUT,nse_inclexcl
 2016-04-01,ADANIENT,IN,nse_inclexcl
 2018-04-02,ADANIENT,OUT,nse_inclexcl
 2022-05-04,ADANIENT,IN,snapshot_diff
-2022-05-04,ADANIGAS,OUT,snapshot_diff
 2018-12-28,ADANIGREEN,IN,nse_inclexcl
 2008-04-24,ADANIPORTS,IN,nse_inclexcl
 2010-04-15,ADANIPOWER,IN,nse_inclexcl
@@ -69,7 +65,6 @@ date,symbol,action,source
 2015-09-28,ADANIPOWER,IN,nse_inclexcl
 2022-05-04,ADANIPOWER,OUT,snapshot_diff
 2023-04-04,ADANIPOWER,IN,snapshot_diff
-2024-02-26,ADANITRANS,OUT,snapshot_diff
 1998-08-01,ADOR,IN,nse_inclexcl
 2011-10-10,ADOR,OUT,nse_inclexcl
 2011-03-25,ADSL,IN,nse_inclexcl
@@ -77,9 +72,7 @@ date,symbol,action,source
 2009-03-27,ADVANTA,IN,nse_inclexcl
 2016-04-29,ADVANTA,OUT,nse_inclexcl
 2022-10-09,ADVENZYMES,OUT,snapshot_diff
-2026-05-30,AEGISCHEM,OUT,snapshot_diff
 2016-04-01,AEGISLOG,IN,nse_inclexcl
-2026-05-30,AEGISLOG,IN,snapshot_diff
 2026-05-30,AEGISVOPAK,IN,snapshot_diff
 2022-10-09,AETHER,IN,snapshot_diff
 2026-05-30,AETHER,OUT,snapshot_diff
@@ -102,9 +95,12 @@ date,symbol,action,source
 2001-08-31,AKSHOPTFBR,IN,nse_inclexcl
 2011-10-10,AKSHOPTFBR,OUT,nse_inclexcl
 1998-08-01,AKZOINDIA,IN,nse_inclexcl
-2022-05-04,AKZOINDIA,OUT,snapshot_diff
 1998-08-01,ALEMBICLTD,IN,nse_inclexcl
 2011-04-11,ALEMBICLTD,OUT,nse_inclexcl
+2022-05-04,ALIVUS,IN,snapshot_diff
+2022-10-09,ALIVUS,OUT,snapshot_diff
+2024-02-26,ALIVUS,IN,snapshot_diff
+2026-05-30,ALIVUS,OUT,snapshot_diff
 2016-09-30,ALKEM,IN,nse_inclexcl
 2020-06-26,ALKYLAMINE,IN,nse_inclexcl
 2026-05-30,ALKYLAMINE,OUT,snapshot_diff
@@ -118,7 +114,6 @@ date,symbol,action,source
 2023-04-04,ALOKINDS,OUT,snapshot_diff
 2024-02-26,ALOKINDS,IN,snapshot_diff
 2026-05-30,ALOKINDS,OUT,snapshot_diff
-2024-02-26,AMARAJABAT,OUT,snapshot_diff
 1998-08-01,AMBALALSA,IN,nse_inclexcl
 2002-03-29,AMBALALSA,OUT,nse_inclexcl
 2019-09-27,AMBER,IN,nse_inclexcl
@@ -156,7 +151,6 @@ date,symbol,action,source
 1999-09-08,ARCHIES,IN,nse_inclexcl
 2008-09-10,ARCHIES,OUT,nse_inclexcl
 1999-05-26,ARE&M,IN,nse_inclexcl
-2024-02-26,ARE&M,IN,snapshot_diff
 2012-04-27,ARSHIYA,IN,nse_inclexcl
 2013-09-27,ARSHIYA,OUT,nse_inclexcl
 1998-08-01,ARVIND,IN,nse_inclexcl
@@ -194,7 +188,6 @@ date,symbol,action,source
 1998-08-01,ATCOM,IN,nse_inclexcl
 2004-12-10,ATCOM,OUT,nse_inclexcl
 2019-09-27,ATGL,IN,nse_inclexcl
-2022-05-04,ATGL,IN,snapshot_diff
 2026-05-30,ATHERENERG,IN,snapshot_diff
 1998-08-01,ATLASCYCLE,IN,nse_inclexcl
 2007-04-04,ATLASCYCLE,OUT,nse_inclexcl
@@ -220,6 +213,7 @@ date,symbol,action,source
 2002-04-23,BAFNAPH,IN,nse_inclexcl
 2011-03-25,BAFNAPH,OUT,nse_inclexcl
 2014-09-19,BAFNAPH,IN,nse_inclexcl
+2020-07-24,BAFNAPH,OUT,reconciliation_vs_earliest_snapshot
 1998-08-01,BAJAJ-AUTO,IN,nse_inclexcl
 2008-03-14,BAJAJ-AUTO,OUT,nse_inclexcl
 2008-09-10,BAJAJ-AUTO,IN,nse_inclexcl
@@ -296,6 +290,7 @@ date,symbol,action,source
 1998-08-01,BHEL,IN,nse_inclexcl
 1998-08-01,BHUPENIND,IN,nse_inclexcl
 1999-05-26,BHUPENIND,OUT,nse_inclexcl
+2022-05-04,BHUSANSTL,OUT,snapshot_diff
 2023-04-04,BIKAJI,IN,snapshot_diff
 1998-08-01,BILVYAPAR,IN,nse_inclexcl
 2002-09-19,BILVYAPAR,OUT,nse_inclexcl
@@ -324,6 +319,7 @@ date,symbol,action,source
 2016-04-01,BOSCH-HCIL,IN,nse_inclexcl
 2019-03-29,BOSCH-HCIL,OUT,nse_inclexcl
 2019-09-27,BOSCH-HCIL,IN,nse_inclexcl
+2022-05-04,BOSCH-HCIL,OUT,snapshot_diff
 2005-03-04,BOSCHCHASY,IN,nse_inclexcl
 2008-10-31,BOSCHCHASY,OUT,nse_inclexcl
 1998-08-01,BOSCHLTD,IN,nse_inclexcl
@@ -340,7 +336,6 @@ date,symbol,action,source
 2002-09-19,BSL,IN,nse_inclexcl
 2006-03-02,BSL,OUT,nse_inclexcl
 2019-09-27,BSOFT,IN,nse_inclexcl
-2022-05-04,CADILAHC,OUT,snapshot_diff
 2015-09-28,CAMLINFINE,IN,nse_inclexcl
 2016-04-01,CAMLINFINE,OUT,nse_inclexcl
 2022-10-09,CAMPUS,IN,snapshot_diff
@@ -369,6 +364,7 @@ date,symbol,action,source
 2014-02-28,CASTROLIND,OUT,nse_inclexcl
 2014-07-28,CASTROLIND,IN,nse_inclexcl
 2016-09-30,CCAVENUE,IN,nse_inclexcl
+2026-05-30,CCAVENUE,OUT,snapshot_diff
 2018-04-02,CDSL,IN,nse_inclexcl
 1998-08-01,CEATFIN,IN,nse_inclexcl
 2002-11-11,CEATFIN,OUT,nse_inclexcl
@@ -391,7 +387,6 @@ date,symbol,action,source
 2013-07-17,CENTURYPLY,OUT,nse_inclexcl
 2014-09-19,CENTURYPLY,IN,nse_inclexcl
 2026-05-30,CENTURYPLY,OUT,snapshot_diff
-2026-05-30,CENTURYTEX,OUT,snapshot_diff
 2016-04-01,CERA,IN,nse_inclexcl
 2026-05-30,CERA,OUT,snapshot_diff
 1998-08-01,CESC,IN,nse_inclexcl
@@ -422,7 +417,6 @@ date,symbol,action,source
 1999-02-03,CHOLAFIN,IN,nse_inclexcl
 2018-02-05,CHOLAHLDNG,IN,nse_inclexcl
 2016-04-01,CIEINDIA,IN,nse_inclexcl
-2024-02-26,CIEINDIA,IN,snapshot_diff
 2001-08-31,CINEVISTA,IN,nse_inclexcl
 2007-04-04,CINEVISTA,OUT,nse_inclexcl
 1998-08-01,CIPLA,IN,nse_inclexcl
@@ -438,13 +432,14 @@ date,symbol,action,source
 2016-09-30,COFFEEDAY,IN,nse_inclexcl
 2019-12-26,COFFEEDAY,OUT,nse_inclexcl
 2013-04-01,COFORGE,IN,nse_inclexcl
-2022-05-04,COFORGE,IN,snapshot_diff
-2026-05-30,COHANCE,IN,snapshot_diff
+2022-05-04,COHANCE,IN,snapshot_diff
 1998-08-01,COLPAL,IN,nse_inclexcl
 2007-11-29,COLPAL,OUT,nse_inclexcl
 2008-12-29,COLPAL,IN,nse_inclexcl
 2000-01-12,CONCOR,IN,nse_inclexcl
 2024-02-26,CONCORDBIO,IN,snapshot_diff
+2022-05-04,CONSCOFFEE,IN,snapshot_diff
+2023-04-04,CONSCOFFEE,OUT,snapshot_diff
 2005-09-26,CONSOFINVT,IN,nse_inclexcl
 2010-04-08,CONSOFINVT,OUT,nse_inclexcl
 2011-03-25,COREEDUTEC,IN,nse_inclexcl
@@ -518,7 +513,6 @@ date,symbol,action,source
 2016-04-01,DHANBANK,OUT,nse_inclexcl
 2016-04-01,DHANI,OUT,nse_inclexcl
 2017-09-29,DHANI,IN,nse_inclexcl
-2022-05-04,DHANI,IN,snapshot_diff
 2023-04-04,DHANI,OUT,snapshot_diff
 2016-04-01,DHANUKA,IN,nse_inclexcl
 2018-04-02,DHANUKA,OUT,nse_inclexcl
@@ -551,13 +545,13 @@ date,symbol,action,source
 2019-03-29,DREDGECORP,OUT,nse_inclexcl
 1998-08-01,DRREDDY,IN,nse_inclexcl
 2026-05-30,DUMMYVEDL1,IN,snapshot_diff
-2026-07-25,DUMMYVEDL1,OUT,snapshot_diff
+2026-08-05,DUMMYVEDL1,OUT,snapshot_diff
 2026-05-30,DUMMYVEDL2,IN,snapshot_diff
-2026-07-25,DUMMYVEDL2,OUT,snapshot_diff
+2026-08-05,DUMMYVEDL2,OUT,snapshot_diff
 2026-05-30,DUMMYVEDL3,IN,snapshot_diff
-2026-07-25,DUMMYVEDL3,OUT,snapshot_diff
+2026-08-05,DUMMYVEDL3,OUT,snapshot_diff
 2026-05-30,DUMMYVEDL4,IN,snapshot_diff
-2026-07-25,DUMMYVEDL4,OUT,snapshot_diff
+2026-08-05,DUMMYVEDL4,OUT,snapshot_diff
 2005-09-26,DWARKESH,IN,nse_inclexcl
 2011-03-25,DWARKESH,OUT,nse_inclexcl
 2009-03-27,DYNAMATECH,IN,nse_inclexcl
@@ -592,6 +586,7 @@ date,symbol,action,source
 2011-06-21,EMBDL,IN,nse_inclexcl
 2011-12-07,EMBDL,OUT,nse_inclexcl
 2012-03-09,EMBDL,IN,nse_inclexcl
+2024-02-26,EMBDL,OUT,snapshot_diff
 2026-05-30,EMCURE,IN,snapshot_diff
 2026-05-30,EMMVEE,IN,snapshot_diff
 2017-03-31,ENDURANCE,IN,nse_inclexcl
@@ -599,12 +594,11 @@ date,symbol,action,source
 2007-04-04,ENIL,IN,nse_inclexcl
 2016-04-01,ENIL,OUT,nse_inclexcl
 2026-05-30,ENRIN,IN,snapshot_diff
-2024-02-26,EPIGRAL,IN,snapshot_diff
+2023-04-04,EPIGRAL,IN,snapshot_diff
 2026-05-30,EPIGRAL,OUT,snapshot_diff
 1998-08-01,EPL,IN,nse_inclexcl
 2018-04-02,EPL,OUT,nse_inclexcl
 2019-03-29,EPL,IN,nse_inclexcl
-2022-05-04,EPL,IN,snapshot_diff
 2026-05-30,EPL,OUT,snapshot_diff
 2022-10-09,EQUITAS,OUT,snapshot_diff
 2022-05-04,EQUITASBNK,IN,snapshot_diff
@@ -623,8 +617,7 @@ date,symbol,action,source
 2001-12-07,ESSARPORTS,OUT,nse_inclexcl
 2008-09-10,ESSARPORTS,IN,nse_inclexcl
 2011-05-18,ESSARPORTS,OUT,nse_inclexcl
-2022-05-04,ESSELPACK,OUT,snapshot_diff
-2026-05-30,ETERNAL,IN,snapshot_diff
+2022-05-04,ETERNAL,IN,snapshot_diff
 1999-02-03,EVEREADY,IN,nse_inclexcl
 2005-03-15,EVEREADY,OUT,nse_inclexcl
 2015-09-28,EVEREADY,IN,nse_inclexcl
@@ -635,10 +628,10 @@ date,symbol,action,source
 2003-04-01,FACT,IN,nse_inclexcl
 2006-03-02,FACT,OUT,nse_inclexcl
 2022-05-04,FACT,IN,snapshot_diff
+2022-05-04,FCEL,OUT,snapshot_diff
 2011-11-22,FCONSUMER,IN,nse_inclexcl
 2013-06-11,FCONSUMER,OUT,nse_inclexcl
 2015-03-27,FCONSUMER,IN,nse_inclexcl
-2022-05-04,FCONSUMER,OUT,snapshot_diff
 1998-08-01,FDC,IN,nse_inclexcl
 2017-09-29,FDC,OUT,nse_inclexcl
 2018-09-28,FDC,IN,nse_inclexcl
@@ -652,6 +645,7 @@ date,symbol,action,source
 2017-03-16,FEL,IN,nse_inclexcl
 2017-10-30,FEL,OUT,nse_inclexcl
 2018-06-29,FEL,IN,nse_inclexcl
+2020-07-24,FEL,OUT,reconciliation_vs_earliest_snapshot
 1998-08-01,FGPIND,IN,nse_inclexcl
 1999-12-08,FGPIND,OUT,nse_inclexcl
 1998-08-01,FINCABLES,IN,nse_inclexcl
@@ -717,6 +711,7 @@ date,symbol,action,source
 2020-06-26,GAYAPROJ,OUT,nse_inclexcl
 2012-09-28,GBGLOBAL,IN,nse_inclexcl
 2015-12-14,GBGLOBAL,OUT,nse_inclexcl
+2026-05-30,GBN,OUT,snapshot_diff
 2013-04-17,GEODESIC,IN,nse_inclexcl
 2013-09-27,GEODESIC,OUT,nse_inclexcl
 2007-04-04,GEOJITFSL,IN,nse_inclexcl
@@ -725,8 +720,6 @@ date,symbol,action,source
 2016-04-01,GEOMETRIC,OUT,nse_inclexcl
 2002-03-29,GEORGWILIM,IN,nse_inclexcl
 2006-07-14,GEORGWILIM,OUT,nse_inclexcl
-2022-05-04,GEPIL,OUT,snapshot_diff
-2022-05-04,GET&D,OUT,snapshot_diff
 1998-08-01,GHCL,IN,nse_inclexcl
 2016-04-01,GHCL,OUT,nse_inclexcl
 2017-03-31,GHCL,IN,nse_inclexcl
@@ -744,20 +737,14 @@ date,symbol,action,source
 2001-04-25,GLFL,OUT,nse_inclexcl
 2016-04-01,GLOBOFFS,IN,nse_inclexcl
 2016-09-30,GLOBOFFS,OUT,nse_inclexcl
-2022-05-04,GLS,IN,snapshot_diff
-2022-10-09,GLS,OUT,snapshot_diff
-2024-02-26,GLS,IN,snapshot_diff
-2026-05-30,GLS,OUT,snapshot_diff
 1999-05-26,GMDCLTD,IN,nse_inclexcl
 2022-05-04,GMDCLTD,OUT,snapshot_diff
 2026-05-30,GMDCLTD,IN,snapshot_diff
 2020-06-26,GMMPFAUDLR,IN,nse_inclexcl
 2026-05-30,GMMPFAUDLR,OUT,snapshot_diff
 2006-12-15,GMRAIRPORT,IN,nse_inclexcl
-2026-05-30,GMRAIRPORT,IN,snapshot_diff
-2022-05-04,GMRINFRA,OUT,snapshot_diff
-2022-10-09,GMRINFRA,IN,snapshot_diff
-2026-05-30,GMRINFRA,OUT,snapshot_diff
+2022-05-04,GMRAIRPORT,OUT,snapshot_diff
+2022-10-09,GMRAIRPORT,IN,snapshot_diff
 1998-08-01,GNFC,IN,nse_inclexcl
 2016-04-01,GNFC,OUT,nse_inclexcl
 2017-03-31,GNFC,IN,nse_inclexcl
@@ -842,7 +829,7 @@ date,symbol,action,source
 1998-08-01,GUJENERGY,IN,nse_inclexcl
 2015-02-02,GUJENERGY,OUT,nse_inclexcl
 2016-04-01,GUJENERGY,IN,nse_inclexcl
-2026-05-30,GUJGASLTD,OUT,snapshot_diff
+2026-05-30,GUJENERGY,OUT,snapshot_diff
 2015-03-27,GULFOILLUB,IN,nse_inclexcl
 2016-04-01,GULFOILLUB,OUT,nse_inclexcl
 2016-04-29,GULFOILLUB,IN,nse_inclexcl
@@ -850,11 +837,13 @@ date,symbol,action,source
 2009-02-25,GVKPIL,IN,nse_inclexcl
 2019-03-29,GVKPIL,OUT,nse_inclexcl
 2002-03-29,GVPIL,IN,nse_inclexcl
+2022-05-04,GVPIL,OUT,snapshot_diff
 1999-02-03,GVT&D,IN,nse_inclexcl
 2002-09-19,GVT&D,OUT,nse_inclexcl
 2009-03-27,GVT&D,IN,nse_inclexcl
 2011-12-14,GVT&D,OUT,nse_inclexcl
 2012-04-27,GVT&D,IN,nse_inclexcl
+2022-05-04,GVT&D,OUT,snapshot_diff
 2026-05-30,GVT&D,IN,snapshot_diff
 2018-09-28,HAL,IN,nse_inclexcl
 2022-05-04,HAPPSTMNDS,IN,snapshot_diff
@@ -898,6 +887,7 @@ date,symbol,action,source
 1998-08-01,HEROMOTOCO,IN,nse_inclexcl
 2022-05-04,HEXAWARE,OUT,snapshot_diff
 2003-04-01,HEXT,IN,nse_inclexcl
+2020-07-24,HEXT,OUT,reconciliation_vs_earliest_snapshot
 2026-05-30,HEXT,IN,snapshot_diff
 2022-05-04,HGS,IN,snapshot_diff
 2024-02-26,HGS,OUT,snapshot_diff
@@ -946,11 +936,8 @@ date,symbol,action,source
 2015-03-27,HUBTOWN,OUT,nse_inclexcl
 2017-10-30,HUDCO,IN,nse_inclexcl
 2026-05-30,HYUNDAI,IN,snapshot_diff
-2024-02-26,IBREALEST,OUT,snapshot_diff
-2026-05-30,IBULHSGFIN,OUT,snapshot_diff
 2019-03-29,IBULLSLTD,IN,nse_inclexcl
 2020-06-26,IBULLSLTD,OUT,nse_inclexcl
-2022-05-04,IBVENTURES,OUT,snapshot_diff
 1998-08-01,ICICI,IN,nse_inclexcl
 2002-04-23,ICICI,OUT,nse_inclexcl
 2026-05-30,ICICIAMC,IN,snapshot_diff
@@ -998,7 +985,6 @@ date,symbol,action,source
 2018-04-02,IIFL,IN,nse_inclexcl
 2018-12-28,IIFL,OUT,nse_inclexcl
 2019-09-27,IIFL,IN,nse_inclexcl
-2023-04-04,IIFLWAM,OUT,snapshot_diff
 2026-05-30,IKS,IN,snapshot_diff
 2011-05-18,IL&FSENGG,IN,nse_inclexcl
 2015-03-27,IL&FSENGG,OUT,nse_inclexcl
@@ -1040,13 +1026,10 @@ date,symbol,action,source
 2013-04-01,INDSWFTLAB,OUT,nse_inclexcl
 1999-12-08,INDUSINDBK,IN,nse_inclexcl
 2013-06-11,INDUSTOWER,IN,nse_inclexcl
-2022-05-04,INDUSTOWER,IN,snapshot_diff
 1998-08-01,INDYESTUF,IN,nse_inclexcl
 2001-04-25,INDYESTUF,OUT,nse_inclexcl
-2026-05-30,INFIBEAM,OUT,snapshot_diff
 1998-08-01,INFOMEDIA,IN,nse_inclexcl
 2006-08-10,INFOMEDIA,OUT,nse_inclexcl
-2022-05-04,INFRATEL,OUT,snapshot_diff
 1998-08-01,INFY,IN,nse_inclexcl
 1998-08-01,INGERRAND,IN,nse_inclexcl
 2017-03-31,INGERRAND,OUT,nse_inclexcl
@@ -1068,6 +1051,8 @@ date,symbol,action,source
 1998-08-01,IONEXCHANG,IN,nse_inclexcl
 2002-09-19,IONEXCHANG,OUT,nse_inclexcl
 1998-08-01,IPCALAB,IN,nse_inclexcl
+2022-05-04,IPITATASPO,IN,snapshot_diff
+2022-10-09,IPITATASPO,OUT,snapshot_diff
 2009-03-27,IRB,IN,nse_inclexcl
 2019-03-29,IRCON,IN,nse_inclexcl
 2022-10-09,IRCON,OUT,snapshot_diff
@@ -1102,9 +1087,8 @@ date,symbol,action,source
 2026-05-30,JAMNAAUTO,OUT,snapshot_diff
 1998-08-01,JAYSREETEA,IN,nse_inclexcl
 2012-09-28,JAYSREETEA,OUT,nse_inclexcl
-2026-07-25,JBCHEPHARM,OUT,snapshot_diff
+2026-08-05,JBCHEPHARM,OUT,snapshot_diff
 2022-10-09,JBMA,IN,snapshot_diff
-2022-05-04,JCHAC,OUT,snapshot_diff
 1998-08-01,JDORGO,IN,nse_inclexcl
 2000-09-03,JDORGO,OUT,nse_inclexcl
 1998-08-01,JINDALPHOT,IN,nse_inclexcl
@@ -1155,6 +1139,7 @@ date,symbol,action,source
 2017-09-29,JSL,IN,nse_inclexcl
 2022-10-09,JSLHISAR,OUT,snapshot_diff
 2026-05-30,JSWCEMENT,IN,snapshot_diff
+2022-05-04,JSWDULUX,OUT,snapshot_diff
 2026-05-30,JSWDULUX,IN,snapshot_diff
 2010-05-26,JSWENERGY,IN,nse_inclexcl
 2010-04-08,JSWHL,IN,nse_inclexcl
@@ -1176,7 +1161,6 @@ date,symbol,action,source
 2014-03-28,JTEKTINDIA,IN,nse_inclexcl
 2016-04-01,JTEKTINDIA,OUT,nse_inclexcl
 2020-09-14,JTEKTINDIA,IN,nse_inclexcl
-2022-05-04,JUBILANT,OUT,snapshot_diff
 2010-10-07,JUBLFOOD,IN,nse_inclexcl
 2022-05-04,JUBLINGREA,IN,snapshot_diff
 2002-04-23,JUBLPHARMA,IN,nse_inclexcl
@@ -1184,7 +1168,6 @@ date,symbol,action,source
 2003-09-09,JUBLPHARMA,IN,nse_inclexcl
 2010-11-25,JUBLPHARMA,OUT,nse_inclexcl
 2011-10-10,JUBLPHARMA,IN,nse_inclexcl
-2022-05-04,JUBLPHARMA,IN,snapshot_diff
 2014-03-28,JUSTDIAL,IN,nse_inclexcl
 2026-05-30,JUSTDIAL,OUT,snapshot_diff
 2026-05-30,JWL,IN,snapshot_diff
@@ -1196,7 +1179,6 @@ date,symbol,action,source
 1998-08-01,KAJARIACER,IN,nse_inclexcl
 2002-10-11,KAKATCEM,IN,nse_inclexcl
 2007-09-24,KAKATCEM,OUT,nse_inclexcl
-2024-02-26,KALPATPOWR,OUT,snapshot_diff
 2022-05-04,KALYANKJIL,IN,snapshot_diff
 1998-08-01,KANSAINER,IN,nse_inclexcl
 2026-05-30,KANSAINER,OUT,snapshot_diff
@@ -1253,7 +1235,6 @@ date,symbol,action,source
 2002-03-29,KOTHARIPRO,IN,nse_inclexcl
 2008-12-03,KOTHARIPRO,OUT,nse_inclexcl
 2006-09-13,KPIL,IN,nse_inclexcl
-2024-02-26,KPIL,IN,snapshot_diff
 2002-09-19,KPITTECH,IN,nse_inclexcl
 2018-09-28,KPITTECH,OUT,nse_inclexcl
 2019-09-27,KPITTECH,IN,nse_inclexcl
@@ -1279,7 +1260,6 @@ date,symbol,action,source
 2013-04-01,KWALITY,OUT,nse_inclexcl
 2016-04-01,KWALITY,IN,nse_inclexcl
 2018-09-28,KWALITY,OUT,nse_inclexcl
-2026-05-30,L&TFH,OUT,snapshot_diff
 2016-09-30,LALPATHLAB,IN,nse_inclexcl
 2015-02-02,LAOPALA,IN,nse_inclexcl
 2017-03-31,LAOPALA,OUT,nse_inclexcl
@@ -1287,7 +1267,6 @@ date,symbol,action,source
 2022-05-04,LAOPALA,OUT,snapshot_diff
 2022-05-04,LATENTVIEW,IN,snapshot_diff
 2017-05-26,LAURUSLABS,IN,nse_inclexcl
-2026-05-30,LAXMIMACH,OUT,snapshot_diff
 2018-09-28,LEMONTREE,IN,nse_inclexcl
 2022-05-04,LEMONTREE,OUT,snapshot_diff
 2023-04-04,LEMONTREE,IN,snapshot_diff
@@ -1308,6 +1287,7 @@ date,symbol,action,source
 2018-09-28,LINDEINDIA,IN,nse_inclexcl
 2026-05-30,LLOYDSME,IN,snapshot_diff
 1998-08-01,LMW,IN,nse_inclexcl
+2026-05-30,LMW,OUT,snapshot_diff
 2022-05-04,LODHA,IN,snapshot_diff
 2012-04-27,LOVABLE,IN,nse_inclexcl
 2015-03-27,LOVABLE,OUT,nse_inclexcl
@@ -1315,13 +1295,8 @@ date,symbol,action,source
 2004-05-24,LT,OUT,nse_inclexcl
 2004-11-18,LT,IN,nse_inclexcl
 2012-03-09,LTF,IN,nse_inclexcl
-2026-05-30,LTF,IN,snapshot_diff
 2026-05-30,LTFOODS,IN,snapshot_diff
-2023-04-04,LTI,OUT,snapshot_diff
-2023-04-04,LTIM,IN,snapshot_diff
-2026-05-30,LTIM,OUT,snapshot_diff
 2017-03-31,LTM,IN,nse_inclexcl
-2026-05-30,LTM,IN,snapshot_diff
 2017-03-31,LTTS,IN,nse_inclexcl
 1998-08-01,LUMAXIND,IN,nse_inclexcl
 2009-10-22,LUMAXIND,OUT,nse_inclexcl
@@ -1339,7 +1314,6 @@ date,symbol,action,source
 1998-08-01,MAFATIND,IN,nse_inclexcl
 2000-12-13,MAFATIND,OUT,nse_inclexcl
 2019-03-29,MAHABANK,IN,nse_inclexcl
-2024-02-26,MAHINDCIE,OUT,snapshot_diff
 2001-12-07,MAHLIFE,IN,nse_inclexcl
 2017-03-31,MAHLIFE,OUT,nse_inclexcl
 2022-10-09,MAHLIFE,IN,snapshot_diff
@@ -1395,7 +1369,6 @@ date,symbol,action,source
 2022-05-04,MAZDOCK,IN,snapshot_diff
 2015-02-02,MBLINFRA,IN,nse_inclexcl
 2016-04-01,MBLINFRA,OUT,nse_inclexcl
-2026-05-30,MCDOWELL-N,OUT,snapshot_diff
 2007-04-04,MCLEODRUSS,IN,nse_inclexcl
 2019-03-29,MCLEODRUSS,OUT,nse_inclexcl
 2019-09-27,MCX,IN,nse_inclexcl
@@ -1413,8 +1386,6 @@ date,symbol,action,source
 2026-05-30,METROBRAND,OUT,snapshot_diff
 2019-09-27,METROPOLIS,IN,nse_inclexcl
 2026-05-30,METROPOLIS,OUT,snapshot_diff
-2023-04-04,MFL,IN,snapshot_diff
-2024-02-26,MFL,OUT,snapshot_diff
 2016-09-30,MFSL,IN,nse_inclexcl
 2017-01-23,MFSL,OUT,nse_inclexcl
 2017-09-05,MFSL,IN,nse_inclexcl
@@ -1431,7 +1402,6 @@ date,symbol,action,source
 2017-03-31,MINDACORP,IN,nse_inclexcl
 2022-05-04,MINDACORP,OUT,snapshot_diff
 2024-02-26,MINDACORP,IN,snapshot_diff
-2022-10-09,MINDAIND,OUT,snapshot_diff
 2007-10-05,MINDTREE,IN,nse_inclexcl
 2022-10-09,MINDTREE,OUT,snapshot_diff
 1999-09-08,MIRZAINT,IN,nse_inclexcl
@@ -1441,6 +1411,7 @@ date,symbol,action,source
 1999-02-03,MODERNWOOL,OUT,nse_inclexcl
 1998-08-01,MODILUFT,IN,nse_inclexcl
 1999-09-08,MODILUFT,OUT,nse_inclexcl
+2022-10-09,MODILUFT,OUT,snapshot_diff
 1998-08-01,MODIRUBBER,IN,nse_inclexcl
 2002-11-11,MODIRUBBER,OUT,nse_inclexcl
 1998-08-01,MODTHREAD,IN,nse_inclexcl
@@ -1454,8 +1425,8 @@ date,symbol,action,source
 1998-08-01,MOREPENLAB,IN,nse_inclexcl
 2005-06-29,MOREPENLAB,OUT,nse_inclexcl
 2001-12-07,MOTHERSON,IN,nse_inclexcl
+2022-05-04,MOTHERSON,OUT,snapshot_diff
 2022-10-09,MOTHERSON,IN,snapshot_diff
-2022-05-04,MOTHERSUMI,OUT,snapshot_diff
 2009-04-17,MOTILALOFS,IN,nse_inclexcl
 2000-12-13,MPHASIS,IN,nse_inclexcl
 2003-02-25,MPSLTD,IN,nse_inclexcl
@@ -1495,6 +1466,7 @@ date,symbol,action,source
 2004-03-15,NAVA,IN,nse_inclexcl
 2016-04-01,NAVA,OUT,nse_inclexcl
 2017-03-31,NAVA,IN,nse_inclexcl
+2022-05-04,NAVA,OUT,snapshot_diff
 2026-05-30,NAVA,IN,snapshot_diff
 2016-09-30,NAVINFLUOR,IN,nse_inclexcl
 2016-04-01,NAVKARCORP,IN,nse_inclexcl
@@ -1506,7 +1478,6 @@ date,symbol,action,source
 2022-05-04,NAZARA,IN,snapshot_diff
 2026-05-30,NAZARA,OUT,snapshot_diff
 2014-03-28,NBCC,IN,nse_inclexcl
-2022-05-04,NBVENTURES,OUT,snapshot_diff
 2004-12-10,NCC,IN,nse_inclexcl
 2001-10-11,NDLVENTURE,IN,nse_inclexcl
 2007-03-29,NDLVENTURE,OUT,nse_inclexcl
@@ -1535,11 +1506,13 @@ date,symbol,action,source
 2016-09-30,NH,IN,nse_inclexcl
 2010-04-06,NHPC,IN,nse_inclexcl
 2018-09-28,NIACL,IN,nse_inclexcl
+2022-10-09,NICOLASPIR,OUT,snapshot_diff
+2023-04-04,NICOLASPIR,IN,snapshot_diff
+2026-05-30,NICOLASPIR,OUT,snapshot_diff
 2008-02-15,NIITLTD,IN,nse_inclexcl
 2016-04-01,NIITLTD,OUT,nse_inclexcl
 2022-10-09,NIITLTD,IN,snapshot_diff
 2023-04-04,NIITLTD,OUT,snapshot_diff
-2022-05-04,NIITTECH,OUT,snapshot_diff
 1999-09-08,NILKAMAL,IN,nse_inclexcl
 2013-04-01,NILKAMAL,OUT,nse_inclexcl
 2016-09-30,NILKAMAL,IN,nse_inclexcl
@@ -1602,7 +1575,6 @@ date,symbol,action,source
 2013-04-01,ORIENTHOT,OUT,nse_inclexcl
 1998-08-01,ORIENTPPR,IN,nse_inclexcl
 2013-03-07,ORIENTPPR,OUT,nse_inclexcl
-2022-05-04,ORIENTREF,OUT,snapshot_diff
 1998-08-01,OSWALAGRO,IN,nse_inclexcl
 2002-03-29,OSWALAGRO,OUT,nse_inclexcl
 1998-08-01,OSWALGREEN,IN,nse_inclexcl
@@ -1632,15 +1604,13 @@ date,symbol,action,source
 1998-08-01,PCBL,IN,nse_inclexcl
 2002-01-17,PCBL,OUT,nse_inclexcl
 2018-09-28,PCBL,IN,nse_inclexcl
+2020-07-24,PCBL,OUT,reconciliation_vs_earliest_snapshot
 2022-05-04,PCBL,IN,snapshot_diff
 2016-04-01,PCJEWELLER,IN,nse_inclexcl
 2020-06-26,PCJEWELLER,OUT,nse_inclexcl
 1998-08-01,PEL,IN,nse_inclexcl
 2008-02-15,PEL,OUT,nse_inclexcl
 2009-03-27,PEL,IN,nse_inclexcl
-2022-10-09,PEL,OUT,snapshot_diff
-2023-04-04,PEL,IN,snapshot_diff
-2026-05-30,PEL,OUT,snapshot_diff
 2015-03-27,PENIND,IN,nse_inclexcl
 2016-04-01,PENIND,OUT,nse_inclexcl
 1998-08-01,PENINLAND,IN,nse_inclexcl
@@ -1657,7 +1627,7 @@ date,symbol,action,source
 1998-08-01,PFIZER,IN,nse_inclexcl
 2012-09-28,PFOCUS,IN,nse_inclexcl
 2015-03-27,PFOCUS,OUT,nse_inclexcl
-2026-07-25,PFOCUS,IN,snapshot_diff
+2026-08-05,PFOCUS,IN,snapshot_diff
 2026-05-30,PGEL,IN,snapshot_diff
 1998-08-01,PGHH,IN,nse_inclexcl
 2003-04-01,PGHH,OUT,nse_inclexcl
@@ -1735,13 +1705,12 @@ date,symbol,action,source
 1998-08-01,PUNJABCHEM,IN,nse_inclexcl
 1998-08-01,PUNJABCHEM,IN,nse_inclexcl
 2002-03-29,PUNJABCHEM,OUT,nse_inclexcl
+2020-07-24,PUNJABCHEM,OUT,reconciliation_vs_earliest_snapshot
 2009-03-27,PURVA,IN,nse_inclexcl
 2016-09-30,PURVA,OUT,nse_inclexcl
 1999-05-26,PVP,IN,nse_inclexcl
 2011-03-25,PVP,OUT,nse_inclexcl
-2024-02-26,PVR,OUT,snapshot_diff
 2013-03-19,PVRINOX,IN,nse_inclexcl
-2024-02-26,PVRINOX,IN,snapshot_diff
 2026-05-30,PWL,IN,snapshot_diff
 2017-03-31,QUESS,IN,nse_inclexcl
 2026-05-30,QUESS,OUT,snapshot_diff
@@ -1820,7 +1789,6 @@ date,symbol,action,source
 2018-04-02,RHFL,IN,nse_inclexcl
 2019-09-27,RHFL,OUT,nse_inclexcl
 2019-09-27,RHIM,IN,nse_inclexcl
-2022-05-04,RHIM,IN,snapshot_diff
 1998-08-01,RICOAUTO,IN,nse_inclexcl
 1999-09-08,RICOAUTO,OUT,nse_inclexcl
 2003-03-05,RICOAUTO,IN,nse_inclexcl
@@ -1877,7 +1845,6 @@ date,symbol,action,source
 1998-08-01,SAKHTISUG,IN,nse_inclexcl
 2011-10-10,SAKHTISUG,OUT,nse_inclexcl
 2014-03-28,SAMMAANCAP,IN,nse_inclexcl
-2026-05-30,SAMMAANCAP,IN,snapshot_diff
 2000-12-13,SANDESH,IN,nse_inclexcl
 2009-03-27,SANDESH,OUT,nse_inclexcl
 1998-08-01,SANOFI,IN,nse_inclexcl
@@ -1911,7 +1878,6 @@ date,symbol,action,source
 2011-10-10,SEAMECLTD,OUT,nse_inclexcl
 2016-04-01,SECURKLOUD,IN,nse_inclexcl
 2019-03-29,SECURKLOUD,OUT,nse_inclexcl
-2022-10-09,SEQUENT,OUT,snapshot_diff
 1998-08-01,SESHAPAPER,IN,nse_inclexcl
 2009-10-22,SESHAPAPER,OUT,nse_inclexcl
 2017-06-23,SFL,IN,nse_inclexcl
@@ -1957,7 +1923,6 @@ date,symbol,action,source
 2006-03-02,SHREERAMA,OUT,nse_inclexcl
 2022-10-09,SHRIRAMCIT,OUT,snapshot_diff
 2003-09-05,SHRIRAMFIN,IN,nse_inclexcl
-2023-04-04,SHRIRAMFIN,IN,snapshot_diff
 2022-05-04,SHYAMMETL,IN,snapshot_diff
 2000-09-03,SHYAMTEL,IN,nse_inclexcl
 2006-07-25,SHYAMTEL,OUT,nse_inclexcl
@@ -2009,7 +1974,6 @@ date,symbol,action,source
 1998-08-01,SPIC,IN,nse_inclexcl
 2004-12-10,SPIC,OUT,nse_inclexcl
 2019-12-27,SPICEJET,IN,nse_inclexcl
-2022-10-09,SPICEJET,OUT,snapshot_diff
 2001-12-07,SPICFINE,IN,nse_inclexcl
 2003-04-01,SPICFINE,OUT,nse_inclexcl
 1998-08-01,SPLPETRO,IN,nse_inclexcl
@@ -2026,7 +1990,6 @@ date,symbol,action,source
 1998-08-01,SRF,IN,nse_inclexcl
 2015-09-28,SRIPIPES,IN,nse_inclexcl
 2016-04-01,SRIPIPES,OUT,nse_inclexcl
-2023-04-04,SRTRANSFIN,OUT,snapshot_diff
 2018-02-05,STAR,OUT,nse_inclexcl
 2018-09-28,STAR,IN,nse_inclexcl
 2022-10-09,STAR,OUT,snapshot_diff
@@ -2042,9 +2005,7 @@ date,symbol,action,source
 2001-12-07,STLTECH,IN,nse_inclexcl
 2016-01-18,STLTECH,OUT,nse_inclexcl
 2017-03-31,STLTECH,IN,nse_inclexcl
-2022-05-04,STLTECH,IN,snapshot_diff
 2026-05-30,STLTECH,OUT,snapshot_diff
-2022-05-04,STRTECH,OUT,snapshot_diff
 1998-08-01,STYRENIX,IN,nse_inclexcl
 2009-03-27,STYRENIX,OUT,nse_inclexcl
 2016-04-01,STYRENIX,IN,nse_inclexcl
@@ -2090,14 +2051,10 @@ date,symbol,action,source
 2012-04-27,SURYAROSNI,OUT,nse_inclexcl
 2015-03-27,SUVEN,IN,nse_inclexcl
 2020-01-16,SUVEN,OUT,nse_inclexcl
-2022-05-04,SUVENPHAR,IN,snapshot_diff
-2026-05-30,SUVENPHAR,OUT,snapshot_diff
 2006-03-23,SUZLON,IN,nse_inclexcl
 2013-04-01,SWANCORP,IN,nse_inclexcl
-2026-05-30,SWANCORP,IN,snapshot_diff
-2022-05-04,SWANENERGY,OUT,snapshot_diff
-2022-10-09,SWANENERGY,IN,snapshot_diff
-2026-05-30,SWANENERGY,OUT,snapshot_diff
+2022-05-04,SWANCORP,OUT,snapshot_diff
+2022-10-09,SWANCORP,IN,snapshot_diff
 1998-08-01,SWARAJENG,IN,nse_inclexcl
 2016-04-01,SWARAJENG,OUT,nse_inclexcl
 2026-05-30,SWIGGY,IN,snapshot_diff
@@ -2124,8 +2081,6 @@ date,symbol,action,source
 2022-05-04,TATACHEM,IN,snapshot_diff
 2002-07-18,TATACOFFEE,IN,nse_inclexcl
 2019-09-27,TATACOFFEE,OUT,nse_inclexcl
-2022-05-04,TATACOFFEE,IN,snapshot_diff
-2023-04-04,TATACOFFEE,OUT,snapshot_diff
 1998-08-01,TATACOMM,IN,nse_inclexcl
 2018-06-29,TATACOMM,OUT,nse_inclexcl
 2020-06-26,TATACOMM,IN,nse_inclexcl
@@ -2134,7 +2089,6 @@ date,symbol,action,source
 1998-08-01,TATAINVEST,IN,nse_inclexcl
 2016-04-01,TATAINVEST,OUT,nse_inclexcl
 2017-03-31,TATAINVEST,IN,nse_inclexcl
-2026-05-30,TATAMOTORS,OUT,snapshot_diff
 2026-05-30,TATAMTRDVR,OUT,snapshot_diff
 1998-08-01,TATASTEEL,IN,nse_inclexcl
 2002-07-09,TATASTLBSL,IN,nse_inclexcl
@@ -2142,13 +2096,10 @@ date,symbol,action,source
 2004-07-09,TATASTLBSL,IN,nse_inclexcl
 2018-09-28,TATASTLBSL,OUT,nse_inclexcl
 2020-01-16,TATASTLBSL,IN,nse_inclexcl
-2022-05-04,TATASTLBSL,OUT,snapshot_diff
 1998-08-01,TATASTLLP,IN,nse_inclexcl
 2002-09-19,TATASTLLP,OUT,nse_inclexcl
 2003-04-07,TATASTLLP,IN,nse_inclexcl
 2019-03-29,TATASTLLP,OUT,nse_inclexcl
-2022-05-04,TATASTLLP,IN,snapshot_diff
-2022-10-09,TATASTLLP,OUT,snapshot_diff
 2026-05-30,TATATECH,IN,snapshot_diff
 1999-05-26,TATAVASHIS,IN,nse_inclexcl
 2006-03-23,TATAVASHIS,OUT,nse_inclexcl
@@ -2203,8 +2154,8 @@ date,symbol,action,source
 2023-04-04,TMB,IN,snapshot_diff
 2024-02-26,TMB,OUT,snapshot_diff
 1998-08-01,TMCV,IN,nse_inclexcl
+2020-07-24,TMCV,OUT,reconciliation_vs_earliest_snapshot
 2026-05-30,TMCV,IN,snapshot_diff
-2026-05-30,TMPV,IN,snapshot_diff
 1998-08-01,TNPETRO,IN,nse_inclexcl
 2011-10-10,TNPETRO,OUT,nse_inclexcl
 1998-08-01,TNPL,IN,nse_inclexcl
@@ -2251,7 +2202,6 @@ date,symbol,action,source
 2009-06-19,TULIP,IN,nse_inclexcl
 2014-03-28,TULIP,OUT,nse_inclexcl
 2007-11-29,TV18BRDCST,IN,nse_inclexcl
-2026-05-30,TV18BRDCST,OUT,snapshot_diff
 2001-08-31,TVSMOTOR,IN,nse_inclexcl
 2016-04-01,TVSSRICHAK,IN,nse_inclexcl
 2019-03-29,TVSSRICHAK,OUT,nse_inclexcl
@@ -2285,7 +2235,6 @@ date,symbol,action,source
 2002-09-19,UNITDSPR,IN,nse_inclexcl
 2014-09-19,UNITDSPR,OUT,nse_inclexcl
 2015-03-27,UNITDSPR,IN,nse_inclexcl
-2026-05-30,UNITDSPR,IN,snapshot_diff
 1998-08-01,UNITECH,IN,nse_inclexcl
 2018-09-28,UNITECH,OUT,nse_inclexcl
 1998-08-01,UNITEDCARB,IN,nse_inclexcl
@@ -2293,7 +2242,6 @@ date,symbol,action,source
 1998-08-01,UNITEDPHOS,IN,nse_inclexcl
 2003-12-05,UNITEDPHOS,OUT,nse_inclexcl
 2017-03-31,UNOMINDA,IN,nse_inclexcl
-2022-10-09,UNOMINDA,IN,snapshot_diff
 2004-08-30,UPL,IN,nse_inclexcl
 2026-05-30,URBANCO,IN,snapshot_diff
 1998-08-01,USHAMART,IN,nse_inclexcl
@@ -2361,6 +2309,7 @@ date,symbol,action,source
 2016-09-30,VIYASH,IN,nse_inclexcl
 2017-03-31,VIYASH,OUT,nse_inclexcl
 2020-06-26,VIYASH,IN,nse_inclexcl
+2022-10-09,VIYASH,OUT,snapshot_diff
 1998-08-01,VLSFINANCE,IN,nse_inclexcl
 2002-07-09,VLSFINANCE,OUT,nse_inclexcl
 2018-09-28,VMART,IN,nse_inclexcl
@@ -2381,8 +2330,8 @@ date,symbol,action,source
 2026-05-30,WAAREEENER,IN,snapshot_diff
 2014-09-19,WABAG,IN,nse_inclexcl
 2020-06-26,WABAG,OUT,nse_inclexcl
+2022-05-04,WABCO-TVS,OUT,snapshot_diff
 2012-04-27,WABCOINDIA,IN,nse_inclexcl
-2022-05-04,WABCOINDIA,OUT,snapshot_diff
 1998-08-01,WARTSILA,IN,nse_inclexcl
 2003-05-02,WARTSILA,OUT,nse_inclexcl
 2004-06-14,WELCORP,IN,nse_inclexcl
@@ -2390,11 +2339,9 @@ date,symbol,action,source
 2006-10-05,WELCORP,IN,nse_inclexcl
 2013-11-18,WELCORP,OUT,nse_inclexcl
 2014-09-19,WELCORP,IN,nse_inclexcl
-2024-02-26,WELSPUNIND,OUT,snapshot_diff
 2004-07-09,WELSPUNLIV,IN,nse_inclexcl
 2009-06-19,WELSPUNLIV,OUT,nse_inclexcl
 2013-04-01,WELSPUNLIV,IN,nse_inclexcl
-2024-02-26,WELSPUNLIV,IN,snapshot_diff
 2019-12-27,WESTLIFE,IN,nse_inclexcl
 2026-05-30,WESTLIFE,OUT,snapshot_diff
 2002-09-19,WHEELS,IN,nse_inclexcl
@@ -2441,14 +2388,11 @@ date,symbol,action,source
 2018-09-28,ZENSARTECH,IN,nse_inclexcl
 2026-05-30,ZENTEC,IN,snapshot_diff
 2022-05-04,ZFCVINDIA,IN,snapshot_diff
-2022-05-04,ZOMATO,IN,snapshot_diff
-2026-05-30,ZOMATO,OUT,snapshot_diff
 1998-08-01,ZUARIIND,IN,nse_inclexcl
 2012-04-09,ZUARIIND,OUT,nse_inclexcl
 2001-04-25,ZYDUSLIFE,IN,nse_inclexcl
 2008-12-29,ZYDUSLIFE,OUT,nse_inclexcl
 2009-04-21,ZYDUSLIFE,IN,nse_inclexcl
-2022-05-04,ZYDUSLIFE,IN,snapshot_diff
 2011-03-25,ZYDUSWELL,IN,nse_inclexcl
 2017-09-29,ZYDUSWELL,OUT,nse_inclexcl
 2018-09-28,ZYDUSWELL,IN,nse_inclexcl
