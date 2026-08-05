@@ -15,17 +15,20 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from backtest_engine import (
+    apply_execution_lag,
     apply_stoploss,
     build_trade_log,
     ensure_stock_data,
-    load_benchmark,
-    load_daily_prices,
-    load_gold_series,
-    load_membership_matrix,
-    load_prices,
     perf_stats,
     run_backtest,
     yearly_table,
+)
+from streamlit_cache import (
+    cached_load_benchmark,
+    cached_load_daily_prices,
+    cached_load_gold,
+    cached_load_membership,
+    cached_load_prices,
 )
 from tax_cost_engine import CostParams, TaxParams, simulate_costs_and_taxes
 
@@ -33,31 +36,6 @@ st.set_page_config(page_title="Nifty 500 Momentum Backtest", layout="wide")
 
 with st.spinner("Fetching price data (first run only)..."):
     ensure_stock_data()
-
-
-@st.cache_data(show_spinner="Loading stock price history...")
-def cached_load_prices(price_col: str) -> pd.DataFrame:
-    return load_prices(price_col)
-
-
-@st.cache_data(show_spinner="Loading benchmark...")
-def cached_load_benchmark(price_col: str) -> pd.Series:
-    return load_benchmark(price_col)
-
-
-@st.cache_data(show_spinner="Loading gold price history...")
-def cached_load_gold(price_col: str) -> pd.Series:
-    return load_gold_series(price_col)
-
-
-@st.cache_data(show_spinner="Loading daily price history for stoploss simulation...")
-def cached_load_daily_prices(price_col: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    return load_daily_prices(price_col)
-
-
-@st.cache_data(show_spinner="Loading point-in-time membership calendar...")
-def cached_load_membership(dates: tuple, symbols: tuple) -> pd.DataFrame:
-    return load_membership_matrix(pd.DatetimeIndex(dates), pd.Index(symbols))
 
 
 def fmt_pct(x: float) -> str:
@@ -121,6 +99,22 @@ with st.sidebar:
                  "its original buy price for this holding period, it's bought again at the "
                  "next day's open (a fresh stoploss is set from that new price) -- up to N "
                  "times per holding period."
+        )
+
+    use_execution_lag = st.checkbox(
+        "T+1 execution (signal at month-end close, trade at next open)", value=False,
+        help="Realistic execution timing: the rebalance ranking is still computed from the "
+             "month-end close (unchanged), but entries and exits are executed on the NEXT "
+             "trading day. A stock being dropped is held (and keeps accruing return) through "
+             "that next day's open, where it's sold; a stock being added is bought at that "
+             "open, so it only starts accruing return from there. Stocks that stay held across "
+             "a rebalance are unaffected. Requires daily price data (a bit slower to compute)."
+    )
+    if use_stoploss and use_execution_lag:
+        st.caption(
+            "Note: stoploss and T+1 execution don't currently compose -- for any month where "
+            "both would apply, T+1 execution's calculation wins (it doesn't account for "
+            "stops/re-entries happening intra-period)."
         )
 
     use_exit_band = st.checkbox(
@@ -231,14 +225,20 @@ strat_rets, holdings_history = run_backtest(
     weighting_mode,
 )
 
-if use_stoploss:
+if use_stoploss or use_execution_lag:
     daily_close, daily_open = cached_load_daily_prices(price_col)
-    stoploss_overlay = apply_stoploss(
-        monthly_prices, daily_close, daily_open, holdings_history, stoploss_pct, max_reentries
-    )
-    for m_date, r in stoploss_overlay.items():
-        if m_date in strat_rets.index:
-            strat_rets.loc[m_date] = r
+    if use_stoploss:
+        stoploss_overlay = apply_stoploss(
+            monthly_prices, daily_close, daily_open, holdings_history, stoploss_pct, max_reentries
+        )
+        for m_date, r in stoploss_overlay.items():
+            if m_date in strat_rets.index:
+                strat_rets.loc[m_date] = r
+    if use_execution_lag:
+        exec_lag_overlay = apply_execution_lag(monthly_prices, daily_close, daily_open, holdings_history)
+        for m_date, r in exec_lag_overlay.items():
+            if m_date in strat_rets.index:
+                strat_rets.loc[m_date] = r
 
 bench_rets = bench_px.pct_change().reindex(strat_rets.index).dropna()
 strat_rets = strat_rets.reindex(bench_rets.index)

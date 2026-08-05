@@ -26,6 +26,7 @@ WEIGHTING_MODE = "equal_monthly"    # or "drift" -- see run_backtest docstring i
 USE_STOPLOSS = False     # per-stock daily stoploss, see apply_stoploss docstring in backtest_engine.py
 STOPLOSS_PCT = 10.0
 MAX_REENTRIES = 0
+USE_EXECUTION_LAG = False    # signal at month-end close, trade at next day's open -- see apply_execution_lag
 
 
 def main():
@@ -44,6 +45,7 @@ def main():
         use_stoploss=USE_STOPLOSS,
         stoploss_pct=STOPLOSS_PCT,
         max_reentries=MAX_REENTRIES,
+        use_execution_lag=USE_EXECUTION_LAG,
     )
 
     mp = result["monthly_prices"]

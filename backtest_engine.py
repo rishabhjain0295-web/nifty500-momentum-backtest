@@ -130,6 +130,58 @@ def load_gold_series(price_col: str = "Adj Close") -> pd.Series:
     return s.resample("ME").last()
 
 
+def load_current_universe() -> pd.DataFrame:
+    """The CURRENT Nifty 500 constituent list (Company Name, Symbol, ...),
+    from data/nifty500_list.csv (see scripts/get_nifty500_list.py). Used by
+    the live stock ranker (pages/1_Stock_Ranker.py) to restrict rankings to
+    today's actual investable universe -- data/stocks/ has ~970 symbols
+    (970 = 500 current + historical/delisted names kept for backtesting;
+    see build_membership_calendar.py), most of which aren't current
+    constituents and shouldn't show up in a live ranking."""
+    f = ROOT / "data" / "nifty500_list.csv"
+    return pd.read_csv(f)
+
+
+def compute_momentum_ranking(
+    monthly_prices: pd.DataFrame,
+    membership: pd.DataFrame | None,
+    as_of_date: pd.Timestamp,
+    lookback_months: int,
+    skip_months: int,
+    min_price: float,
+) -> pd.Series | None:
+    """Trailing lookback_months return (skipping the most recent skip_months)
+    for every stock eligible as of as_of_date, sorted descending (first
+    entry = rank 1 = highest momentum). Returns None if as_of_date isn't in
+    monthly_prices or doesn't have enough trailing history.
+
+    Eligibility: valid (>0) price at both the lookback start and end, last
+    price >= min_price, and -- if membership is given -- an actual Nifty
+    500 constituent as of as_of_date per the point-in-time calendar. This
+    is the single source of truth for the ranking formula, shared by
+    run_backtest (historical simulation) and the live stock ranker
+    (pages/1_Stock_Ranker.py, current snapshot).
+    """
+    dates = monthly_prices.index
+    if as_of_date not in dates:
+        return None
+    i = dates.get_loc(as_of_date)
+    end_idx = i - skip_months
+    start_idx = end_idx - lookback_months
+    if start_idx < 0:
+        return None
+
+    px_start = monthly_prices.iloc[start_idx]
+    px_end = monthly_prices.iloc[end_idx]
+    last_price = monthly_prices.iloc[i]
+
+    eligible = (px_start > 0) & (px_end > 0) & (last_price >= min_price)
+    if membership is not None:
+        eligible &= membership.loc[as_of_date]
+    mom = (px_end / px_start - 1.0)[eligible].dropna()
+    return mom.sort_values(ascending=False)
+
+
 def load_membership_matrix(dates: pd.DatetimeIndex, symbols: pd.Index) -> pd.DataFrame:
     """Boolean (date x symbol) matrix: was `symbol` a Nifty 500 constituent as of `date`."""
     cal = pd.read_csv(MEMBERSHIP_CSV, parse_dates=["start", "end"])
@@ -273,24 +325,10 @@ def run_backtest(
             months_held = 0
             continue
 
-        end_idx = i - skip_months
-        start_idx = end_idx - lookback_months
-        if start_idx < 0:
+        ranked = compute_momentum_ranking(monthly_prices, membership, today, lookback_months, skip_months, min_price)
+        if ranked is None or len(ranked) < n_stocks:
             continue
 
-        px_start = monthly_prices.iloc[start_idx]
-        px_end = monthly_prices.iloc[end_idx]
-        last_price = monthly_prices.iloc[i]
-
-        eligible = (px_start > 0) & (px_end > 0) & (last_price >= min_price)
-        if membership is not None:
-            eligible &= membership.loc[today]
-        mom = (px_end / px_start - 1.0)[eligible].dropna()
-
-        if len(mom) < n_stocks:
-            continue
-
-        ranked = mom.sort_values(ascending=False)
         if use_exit_band and exit_band_pct > 0:
             exit_threshold_rank = n_stocks * (1 + exit_band_pct / 100.0)
             rank_of = {sym: pos + 1 for pos, sym in enumerate(ranked.index)}
@@ -427,6 +465,118 @@ def apply_stoploss(
         monthly_from_daily = (1 + daily_port_ret).resample("ME").prod() - 1
         for m_date, r in monthly_from_daily.items():
             monthly_result[m_date] = r
+
+    return monthly_result
+
+
+def apply_execution_lag(
+    monthly_prices: pd.DataFrame,
+    daily_close: pd.DataFrame,
+    daily_open: pd.DataFrame,
+    holdings_history: list[tuple[pd.Timestamp, list[str]]],
+) -> dict[pd.Timestamp, float]:
+    """Re-simulates portfolio returns reflecting T+1-open execution: the
+    rebalance SIGNAL is still generated from the month-end close (unchanged
+    ranking/selection in run_backtest -- this does not affect which stocks
+    get picked), but ENTRIES and EXITS are executed on the next trading day,
+    not at the month-end close itself.
+
+      - Stocks continuing to be held across a rebalance (survivors) are
+        unaffected -- no execution needed, they just keep compounding
+        exactly as the baseline calculation already has them.
+      - Stocks being DROPPED continue to be held (and accrue return) through
+        the next trading day's OPEN, at which point they're sold. This adds
+        a small return sliver (month-end close -> next-day open) that the
+        baseline calculation misses entirely for these stocks.
+      - Stocks being ADDED are bought at the next trading day's OPEN, so
+        they only start accruing return from that point -- the baseline
+        calculation overstates them by including the month-end-close-to-
+        next-day-open gap they didn't actually experience.
+
+    Only the period FROM each rebalance date TO the next is touched (the
+    prior period, which ends at that rebalance date, is unaffected -- the
+    old holdings genuinely were held through that close in both models).
+
+    Returns {month_end_date: return} for every month following a rebalance
+    where the holdings list actually changed. Months with no change, GOLD-
+    regime months, and the very first holding period (nothing to compare
+    against, since there's no "previous" holdings list yet) are left
+    untouched by the caller.
+    """
+    monthly_result: dict[pd.Timestamp, float] = {}
+    last_daily_date = daily_close.index.max()
+
+    prev_holdings: set[str] = set()
+    for idx in range(len(holdings_history)):
+        start_date, holdings = holdings_history[idx]
+        if holdings == ["GOLD"]:
+            prev_holdings = set()
+            continue
+        curr_holdings = set(holdings)
+        end_date = holdings_history[idx + 1][0] if idx + 1 < len(holdings_history) else last_daily_date
+
+        added = curr_holdings - prev_holdings
+        dropped = prev_holdings - curr_holdings
+        survivors = curr_holdings & prev_holdings
+        n = len(curr_holdings)
+
+        if n == 0 or (not added and not dropped):
+            prev_holdings = curr_holdings
+            continue
+
+        period_dates = daily_close.index[(daily_close.index > start_date) & (daily_close.index <= end_date)]
+        if len(period_dates) == 0:
+            prev_holdings = curr_holdings
+            continue
+
+        daily_port_ret = pd.Series(0.0, index=period_dates)
+        exec_date = period_dates[0]
+
+        for sym in dropped:
+            if sym not in monthly_prices.columns or sym not in daily_open.columns:
+                continue
+            last_price = monthly_prices.loc[start_date, sym]
+            exec_open = daily_open.loc[exec_date, sym]
+            if pd.isna(last_price) or last_price <= 0 or pd.isna(exec_open) or exec_open <= 0:
+                continue
+            daily_port_ret.loc[exec_date] += (exec_open / last_price - 1) / n
+
+        for sym in added:
+            if sym not in daily_open.columns or sym not in daily_close.columns:
+                continue
+            exec_open = daily_open.loc[exec_date, sym]
+            exec_close = daily_close.loc[exec_date, sym]
+            if pd.isna(exec_open) or exec_open <= 0 or pd.isna(exec_close):
+                continue
+            daily_port_ret.loc[exec_date] += (exec_close / exec_open - 1) / n
+            prev_price = exec_close
+            for d in period_dates[1:]:
+                px = daily_close.loc[d, sym]
+                if pd.isna(px):
+                    continue
+                if pd.notna(prev_price) and prev_price > 0:
+                    daily_port_ret.loc[d] += (px / prev_price - 1) / n
+                prev_price = px
+
+        for sym in survivors:
+            if sym not in monthly_prices.columns or sym not in daily_close.columns:
+                continue
+            prev_price = monthly_prices.loc[start_date, sym]
+            if pd.isna(prev_price) or prev_price <= 0:
+                continue
+            for d in period_dates:
+                px = daily_close.loc[d, sym]
+                if pd.isna(px):
+                    continue
+                if pd.notna(prev_price) and prev_price > 0:
+                    daily_port_ret.loc[d] += (px / prev_price - 1) / n
+                prev_price = px
+
+        monthly_from_daily = (1 + daily_port_ret).resample("ME").prod() - 1
+        for m_date, r in monthly_from_daily.items():
+            monthly_result[m_date] = r
+
+        prev_holdings = curr_holdings
 
     return monthly_result
 
@@ -574,8 +724,15 @@ def run_full_backtest(
     use_stoploss: bool = False,
     stoploss_pct: float = 10.0,
     max_reentries: int = 0,
+    use_execution_lag: bool = False,
 ):
-    """End-to-end: load data, run strategy, align to benchmark. Returns a dict."""
+    """End-to-end: load data, run strategy, align to benchmark. Returns a dict.
+
+    Note: use_stoploss and use_execution_lag don't currently compose -- each
+    independently recomputes a changed month's return from scratch rather
+    than layering on top of the other. If both are enabled, execution_lag
+    is applied second and wins for any month both would have touched.
+    """
     monthly_prices = load_prices(price_col)
     membership = None
     if use_membership_filter:
@@ -591,14 +748,20 @@ def run_full_backtest(
         weighting_mode,
     )
 
-    if use_stoploss:
+    if use_stoploss or use_execution_lag:
         daily_close, daily_open = load_daily_prices(price_col)
-        overlay = apply_stoploss(
-            monthly_prices, daily_close, daily_open, holdings_history, stoploss_pct, max_reentries
-        )
-        for m_date, r in overlay.items():
-            if m_date in strat_rets.index:
-                strat_rets.loc[m_date] = r
+        if use_stoploss:
+            overlay = apply_stoploss(
+                monthly_prices, daily_close, daily_open, holdings_history, stoploss_pct, max_reentries
+            )
+            for m_date, r in overlay.items():
+                if m_date in strat_rets.index:
+                    strat_rets.loc[m_date] = r
+        if use_execution_lag:
+            overlay = apply_execution_lag(monthly_prices, daily_close, daily_open, holdings_history)
+            for m_date, r in overlay.items():
+                if m_date in strat_rets.index:
+                    strat_rets.loc[m_date] = r
 
     bench_rets = bench_px.pct_change().reindex(strat_rets.index).dropna()
     strat_rets = strat_rets.reindex(bench_rets.index)
