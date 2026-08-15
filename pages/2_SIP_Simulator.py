@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from backtest_engine import apply_execution_lag, ensure_stock_data, run_backtest
-from sip_engine import simulate_dynamic_sip, simulate_plain_sip
+from sip_engine import simulate_dynamic_sip, simulate_lumpsum_on_drawdown, simulate_plain_sip
 from streamlit_cache import (
     cached_load_daily_prices,
     cached_load_liquid,
@@ -89,6 +89,31 @@ with st.sidebar:
              "high made during the recovery itself."
     )
 
+    st.header("Lumpsum on drawdown")
+    use_lumpsum = st.checkbox(
+        "Add opportunistic lumpsum", value=False,
+        help="An independent sleeve of money, separate from the SIP above: invests a fixed "
+             "lumpsum into the strategy each time it dips below its all-time high by a "
+             "threshold, then waits for a confirmed recovery before it's willing to fire again. "
+             "Tracked on its own, and also shown combined with each SIP mode for reference."
+    )
+    lumpsum_amount = 100000.0
+    lumpsum_drawdown_pct = 15.0
+    lumpsum_reset_pct = 0.0
+    if use_lumpsum:
+        lumpsum_amount = st.number_input("Lumpsum amount per trigger (Rs)", min_value=1000.0, value=100000.0, step=5000.0)
+        lumpsum_drawdown_pct = st.slider(
+            "Drawdown that triggers a lumpsum (%)", min_value=1, max_value=50, value=15, step=1,
+            help="Invests the lumpsum the first time the strategy's NAV falls this far below "
+                 "its running all-time high."
+        )
+        lumpsum_reset_pct = st.slider(
+            "Recovery above pre-drawdown peak to re-arm (%)", min_value=0, max_value=100, value=0, step=1,
+            help="0 = ready to trigger again as soon as the strategy merely reclaims its old "
+                 "high. Higher = requires a confirmed rally past the old peak by this much "
+                 "before it's willing to fire on the next dip."
+        )
+
 monthly_prices = cached_load_prices(price_col)
 membership = None
 if use_membership_filter:
@@ -120,6 +145,9 @@ plain = simulate_plain_sip(strat_rets, sip_amount)
 dynamic = simulate_dynamic_sip(
     strat_rets, liquid_rets, sip_amount, strategy_alloc_pct, drawdown_trigger_pct, recovery_pct
 )
+lumpsum = None
+if use_lumpsum:
+    lumpsum = simulate_lumpsum_on_drawdown(strat_rets, lumpsum_amount, lumpsum_drawdown_pct, lumpsum_reset_pct)
 
 
 def fmt_rs(x: float) -> str:
@@ -223,6 +251,58 @@ with col_b:
         st.dataframe(tdf, hide_index=True, height=350)
     else:
         st.caption("No drawdown large enough to trigger full allocation with these parameters.")
+
+if lumpsum is not None:
+    st.divider()
+    st.subheader("Lumpsum on drawdown")
+    st.caption(
+        "An independent sleeve, tracked entirely separately from the SIP above -- not blended "
+        "into either mode's totals. Shown on its own, plus combined with each SIP mode below "
+        "for reference (simple addition of the two value series)."
+    )
+    lcols = st.columns(4)
+    lcols[0].metric("Lumpsum invested", fmt_rs(lumpsum["total_invested"]))
+    lcols[1].metric("Lumpsum current value", fmt_rs(lumpsum["final_value"]), delta=fmt_pct(lumpsum["xirr"]) + " XIRR")
+    lcols[2].metric("Triggers fired", str(lumpsum["n_triggers"]))
+    lump_dd = lumpsum["value"] / lumpsum["value"].cummax() - 1 if lumpsum["total_invested"] > 0 else lumpsum["value"] * 0
+    lcols[3].metric("Lumpsum sleeve max drawdown", fmt_pct(lump_dd.min()) if lumpsum["total_invested"] > 0 else "-")
+
+    if lumpsum["n_triggers"] == 0:
+        st.info("No drawdown reached the trigger threshold with these parameters -- the lumpsum was never deployed.")
+    else:
+        fig_lump = go.Figure()
+        fig_lump.add_trace(go.Scatter(x=lumpsum["invested"].index, y=lumpsum["invested"].values,
+                                       name="Lumpsum invested", line=dict(dash="dot", color="gray")))
+        fig_lump.add_trace(go.Scatter(x=lumpsum["value"].index, y=lumpsum["value"].values, name="Lumpsum sleeve value"))
+        fig_lump.update_layout(
+            yaxis_title="Rs", legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            margin=dict(t=30, l=10, r=10, b=10), height=350,
+        )
+        st.plotly_chart(fig_lump, use_container_width=True)
+
+        st.markdown("**Combined with each SIP mode**")
+        combined_plain = plain["value"] + lumpsum["value"]
+        combined_dynamic = dynamic["value"] + lumpsum["value"]
+        fig_combined = go.Figure()
+        fig_combined.add_trace(go.Scatter(x=plain["value"].index, y=plain["value"].values, name="Plain SIP alone"))
+        fig_combined.add_trace(go.Scatter(x=combined_plain.index, y=combined_plain.values, name="Plain SIP + Lumpsum"))
+        fig_combined.add_trace(go.Scatter(x=dynamic["value"].index, y=dynamic["value"].values, name="Dynamic SIP alone"))
+        fig_combined.add_trace(go.Scatter(x=combined_dynamic.index, y=combined_dynamic.values, name="Dynamic SIP + Lumpsum"))
+        fig_combined.update_layout(
+            yaxis_type="log", yaxis_title="Portfolio value (Rs, log scale)",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            margin=dict(t=30, l=10, r=10, b=10), height=400,
+        )
+        st.plotly_chart(fig_combined, use_container_width=True)
+
+        col_c, col_d = st.columns(2)
+        col_c.metric("Plain SIP + Lumpsum final value", fmt_rs(combined_plain.iloc[-1]))
+        col_d.metric("Dynamic SIP + Lumpsum final value", fmt_rs(combined_dynamic.iloc[-1]))
+
+        with st.expander("Lumpsum trigger dates"):
+            trig_df = pd.DataFrame(lumpsum["triggers"], columns=["Date", "Detail"])
+            trig_df["Date"] = trig_df["Date"].dt.date
+            st.dataframe(trig_df, hide_index=True, height=250)
 
 st.divider()
 st.caption(

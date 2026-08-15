@@ -1,6 +1,6 @@
 """
 SIP (Systematic Investment Plan) simulation, layered on top of a momentum
-backtest's monthly return series (see backtest_engine.py). Two modes:
+backtest's monthly return series (see backtest_engine.py). Three pieces:
 
   - Plain SIP: a fixed amount invested into the strategy every month.
   - Dynamic SIP: split between the strategy and a liquid fund (LIQUIDBEES)
@@ -11,6 +11,11 @@ backtest's monthly return series (see backtest_engine.py). Two modes:
     to a recovery threshold above that PREVIOUS all-time high (the peak
     that was being drawn down from, not any new high made during the
     recovery). At that point contributions revert to the normal split.
+  - Lumpsum-on-drawdown (simulate_lumpsum_on_drawdown): an independent,
+    separately-tracked sleeve that invests a fixed lumpsum into the
+    strategy each time it dips a threshold below its all-time high, armed
+    again only after a confirmed recovery. Meant to be combined with
+    either SIP mode by the caller, not blended into their totals.
 
 Design assumption (the source spec was ambiguous here): reverting to the
 normal split only changes where FUTURE contributions go. Money that moved
@@ -152,6 +157,75 @@ def simulate_dynamic_sip(
         "total_invested": total_invested,
         "final_value": final_value,
         "xirr": compute_xirr(xirr_cashflows),
+    }
+
+
+def simulate_lumpsum_on_drawdown(
+    strat_rets: pd.Series,
+    lumpsum_amount: float,
+    drawdown_trigger_pct: float,
+    reset_recovery_pct: float = 0.0,
+) -> dict:
+    """Opportunistic lumpsum sleeve, entirely separate from any SIP: invests
+    a fixed lumpsum_amount into the strategy the first time its NAV crosses
+    drawdown_trigger_pct below its running all-time high, then waits for
+    the NAV to climb back to reset_recovery_pct above THAT SAME pre-drawdown
+    peak before it's willing to trigger again -- one lumpsum per drawdown
+    episode, not one per month spent underwater. reset_recovery_pct=0 means
+    "reset once NAV merely reclaims the old high"; set it higher to require
+    a confirmed rally past the old peak before re-arming (mirrors
+    simulate_dynamic_sip's trigger/recovery pattern).
+
+    This represents money added ON TOP OF, not instead of, a regular
+    contribution plan -- it has its own units/NAV tracking and is not
+    mixed into simulate_plain_sip or simulate_dynamic_sip's totals. Combine
+    the two callers' "value" series yourself if you want a combined total.
+    """
+    dates = strat_rets.index
+    units = 0.0
+    nav = 1.0
+    running_ath = 1.0
+    trigger_ath = None
+    state = "watching"
+    total_invested = 0.0
+
+    value_series = pd.Series(index=dates, dtype=float)
+    invested_series = pd.Series(index=dates, dtype=float)
+    triggers: list[tuple[pd.Timestamp, str]] = []
+    cashflows = []
+
+    for d in dates:
+        if state == "watching":
+            if nav <= running_ath * (1 - drawdown_trigger_pct / 100.0):
+                trigger_ath = running_ath
+                units += lumpsum_amount / nav
+                total_invested += lumpsum_amount
+                cashflows.append((d, -lumpsum_amount))
+                triggers.append((d, f"invested at {(nav / running_ath - 1):.1%} off ATH"))
+                state = "triggered"
+        elif state == "triggered":
+            if trigger_ath is not None and nav >= trigger_ath * (1 + reset_recovery_pct / 100.0):
+                state = "watching"
+
+        r = strat_rets.loc[d]
+        r = r if pd.notna(r) else 0.0
+        nav *= (1 + r)
+        running_ath = max(running_ath, nav)
+
+        value_series.loc[d] = units * nav
+        invested_series.loc[d] = total_invested
+
+    final_value = value_series.iloc[-1] if len(value_series) else 0.0
+    xirr_cashflows = cashflows + [(dates[-1], final_value)] if cashflows else []
+
+    return {
+        "value": value_series,
+        "invested": invested_series,
+        "total_invested": total_invested,
+        "final_value": final_value,
+        "xirr": compute_xirr(xirr_cashflows),
+        "triggers": triggers,
+        "n_triggers": len(triggers),
     }
 
 
