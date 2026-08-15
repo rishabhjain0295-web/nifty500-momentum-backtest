@@ -157,6 +157,50 @@ fig.update_layout(
 )
 st.plotly_chart(fig, use_container_width=True)
 
+st.subheader("Drawdown")
+strat_cum = (1 + strat_rets).cumprod()
+strat_dd = strat_cum / strat_cum.cummax() - 1
+plain_value_dd = plain["value"] / plain["value"].cummax() - 1
+dynamic_value_dd = dynamic["value"] / dynamic["value"].cummax() - 1
+
+dd_cols = st.columns(3)
+dd_cols[0].metric("Strategy NAV max drawdown", fmt_pct(strat_dd.min()))
+dd_cols[1].metric("Plain SIP portfolio max drawdown", fmt_pct(plain_value_dd.min()))
+dd_cols[2].metric("Dynamic SIP portfolio max drawdown", fmt_pct(dynamic_value_dd.min()))
+st.caption(
+    "Strategy NAV drawdown is the underlying strategy's own price-based drawdown (what "
+    "drives the dynamic mode's trigger, dashed line below). Portfolio drawdown is each SIP's "
+    "actual invested value relative to ITS OWN running peak -- the more relevant number for "
+    "'how underwater was my actual money.' Early in a SIP, ongoing contributions can make this "
+    "noticeably shallower than the pure NAV drawdown; late in a long-running SIP, once "
+    "compounded value dwarfs the monthly contribution, the two converge. Note the dynamic "
+    "mode's goal isn't necessarily a shallower portfolio drawdown than plain SIP -- going "
+    "further into the strategy during a fall doesn't reduce how far it falls, it's a bet on "
+    "the recovery. Compare the two lines below rather than assuming dynamic is 'safer.'"
+)
+
+fig_dd1 = go.Figure()
+fig_dd1.add_trace(go.Scatter(x=strat_dd.index, y=strat_dd.values, name="Strategy NAV drawdown", fill="tozeroy"))
+fig_dd1.add_hline(
+    y=-drawdown_trigger_pct / 100, line_dash="dash", line_color="red",
+    annotation_text=f"trigger ({-drawdown_trigger_pct}%)", annotation_position="bottom right",
+)
+fig_dd1.update_layout(
+    yaxis_tickformat=".0%", yaxis_title="Drawdown",
+    margin=dict(t=30, l=10, r=10, b=10), height=300,
+)
+st.plotly_chart(fig_dd1, use_container_width=True)
+
+fig_dd2 = go.Figure()
+fig_dd2.add_trace(go.Scatter(x=plain_value_dd.index, y=plain_value_dd.values, name="Plain SIP"))
+fig_dd2.add_trace(go.Scatter(x=dynamic_value_dd.index, y=dynamic_value_dd.values, name="Dynamic SIP"))
+fig_dd2.update_layout(
+    yaxis_tickformat=".0%", yaxis_title="Portfolio value drawdown",
+    legend=dict(orientation="h", yanchor="bottom", y=1.02),
+    margin=dict(t=30, l=10, r=10, b=10), height=300,
+)
+st.plotly_chart(fig_dd2, use_container_width=True)
+
 col_a, col_b = st.columns([1, 1])
 with col_a:
     st.subheader("Dynamic SIP: strategy vs liquid split")
