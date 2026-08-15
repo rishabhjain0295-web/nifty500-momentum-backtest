@@ -10,6 +10,7 @@ import streamlit as st
 from backtest_engine import (
     load_benchmark,
     load_current_universe,
+    load_daily_ohlc,
     load_daily_prices,
     load_gold_series,
     load_liquid_series,
@@ -51,3 +52,8 @@ def cached_load_current_universe() -> pd.DataFrame:
 @st.cache_data(show_spinner="Loading liquid fund (LIQUIDBEES) price history...")
 def cached_load_liquid(price_col: str) -> pd.Series:
     return load_liquid_series(price_col)
+
+
+@st.cache_data(show_spinner="Loading daily OHLC history for swing trading (this can take ~20s)...")
+def cached_load_daily_ohlc() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    return load_daily_ohlc()

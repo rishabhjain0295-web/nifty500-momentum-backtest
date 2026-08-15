@@ -1,0 +1,265 @@
+"""
+Daily-resolution swing trading engine, layered on the SAME momentum
+universe selection as backtest_engine.py (compute_momentum_ranking) but
+with entirely different entry/exit mechanics: instead of holding the top
+N stocks continuously and rebalancing monthly, this scans the top N
+momentum stocks each month for breakout signals and trades them
+individually with risk-based position sizing, a trailing/fixed stop, and
+an R-multiple profit target.
+
+Universe: at each monthly rebalance date, the top n_stocks by trailing
+lookback_months return (skipping skip_months) become eligible for NEW
+entries until the next rebalance -- reusing compute_momentum_ranking, so
+this can never drift out of sync with the momentum backtest's own
+ranking. A stock already in an open position when it drops out of next
+month's universe is NOT force-closed -- the universe only gates new
+entries; existing positions are managed to their own stop/target
+regardless (a real trader's screener works the same way -- it finds
+candidates, it doesn't manage open trades).
+
+Entry strategies (entry_strategy):
+  - "gap_up": buy at today's open when it gaps up gap_pct% or more above
+    yesterday's close.
+  - "donchian": buy when today's high breaks above the highest high of
+    the trailing donchian_entry_lookback days (a stop-buy simulation --
+    fill price is the worse of today's open and the breakout level).
+
+Stop (exit_mode) -- the SAME mechanism produces every stop variant asked
+for across this feature's spec:
+  - "trailing_donchian" with exit_lookback_days=1: "previous day's low"
+    (the gap-up strategy's stated stop).
+  - "trailing_donchian" with exit_lookback_days=N: "N-day channel low"
+    (the Donchian strategy's stated stop, recomputed daily so it's a
+    genuine trailing stop, not fixed at entry).
+  - "fixed_pct": stop = entry_price * (1 - stop_pct/100), fixed for the
+    life of the position.
+  Whichever mode, the exit fires when a day's low touches or breaches the
+  stop; if the stock gaps below it, the fill is the worse of today's open
+  and the stop level.
+
+Position sizing -- risk-based, not equal-weight: qty is set so that if
+the INITIAL stop (computed once at entry) is hit, the loss equals
+risk_pct of capital_base. This alone is not safe to use unbounded: a
+tight stop (small % away from entry) demands a huge position to reach
+risk_pct of loss-if-stopped-out -- e.g. a 1% stop distance needs a
+position worth 100% of capital just to risk 1%. Real risk-based systems
+always pair this with a hard position-size ceiling (max_position_pct of
+capital_base), which is what actually binds on tight-stop setups; qty is
+also capped so a single trade never exceeds available cash (no leverage/
+margin modeled). Either cap means realized risk on that trade is LESS
+than risk_pct, never more.
+
+Profit target: target_price = entry_price + risk_reward_ratio * (entry_price
+- initial_stop_price), i.e. an R-multiple of the ORIGINAL risk (the target
+doesn't move even if a trailing stop later tightens the effective risk).
+Checked daily against that day's high; exits at the better of today's open
+and the target if it gapped past it.
+
+If a day's low would hit the stop AND its high would hit the target, the
+stop is assumed to have triggered first (conservative -- daily OHLC bars
+don't tell us the actual intraday sequence).
+"""
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from backtest_engine import compute_momentum_ranking
+
+
+def run_swing_backtest(
+    monthly_prices: pd.DataFrame,
+    membership: pd.DataFrame | None,
+    daily_open: pd.DataFrame,
+    daily_high: pd.DataFrame,
+    daily_low: pd.DataFrame,
+    daily_close: pd.DataFrame,
+    lookback_months: int,
+    skip_months: int,
+    n_stocks: int,
+    min_price: float,
+    entry_strategy: str = "gap_up",
+    gap_pct: float = 1.0,
+    donchian_entry_lookback: int = 20,
+    exit_mode: str = "trailing_donchian",
+    exit_lookback_days: int = 1,
+    stop_pct: float = 8.0,
+    risk_pct: float = 1.0,
+    risk_reward_ratio: float = 2.0,
+    max_position_pct: float = 20.0,
+    capital_base: float = 1_000_000.0,
+) -> dict:
+    # 1. universe calendar: top n_stocks at each monthly rebalance
+    monthly_dates = monthly_prices.index
+    min_history_months = lookback_months + skip_months + 1
+    universe_by_period: list[tuple[pd.Timestamp, list[str]]] = []
+    for i in range(min_history_months, len(monthly_dates)):
+        today = monthly_dates[i]
+        ranked = compute_momentum_ranking(monthly_prices, membership, today, lookback_months, skip_months, min_price)
+        if ranked is None or len(ranked) < n_stocks:
+            continue
+        universe_by_period.append((today, ranked.head(n_stocks).index.tolist()))
+
+    empty = {
+        "trades": pd.DataFrame(columns=["symbol", "entry_date", "entry_price", "stop_price", "target_price",
+                                         "exit_date", "exit_price", "exit_reason", "qty", "risked_rs",
+                                         "pnl_rs", "pnl_pct", "r_multiple", "hold_days", "status"]),
+        "equity": pd.Series(dtype=float),
+        "n_universe_periods": 0,
+        "capital_base": capital_base,
+    }
+    if not universe_by_period:
+        return empty
+
+    rebalance_dates = pd.DatetimeIndex([u[0] for u in universe_by_period])
+    start_date = rebalance_dates[0]
+    last_daily_date = daily_close.index.max()
+    if last_daily_date <= start_date:
+        return empty
+    trading_days = daily_close.index[(daily_close.index > start_date) & (daily_close.index <= last_daily_date)]
+    if len(trading_days) == 0:
+        return empty
+
+    # 2. precompute vectorized rolling references ONCE (fast) instead of
+    # re-slicing per stock per day (which would be very slow at this scale)
+    prev_close = daily_close.shift(1)
+    donchian_entry_upper = None
+    if entry_strategy == "donchian":
+        donchian_entry_upper = daily_high.rolling(donchian_entry_lookback).max().shift(1)
+    trailing_exit_low = None
+    if exit_mode == "trailing_donchian":
+        trailing_exit_low = daily_low.rolling(exit_lookback_days).min().shift(1)
+
+    cash = capital_base
+    positions: dict[str, dict] = {}  # symbol -> entry_date, entry_price, qty, stop_price(initial), target_price
+    trades: list[dict] = []
+    equity_series = pd.Series(index=trading_days, dtype=float)
+
+    def stop_level_for(sym: str, day: pd.Timestamp, entry_price: float) -> float:
+        if exit_mode == "trailing_donchian":
+            if sym in trailing_exit_low.columns and day in trailing_exit_low.index:
+                return trailing_exit_low.at[day, sym]
+            return np.nan
+        return entry_price * (1 - stop_pct / 100.0)
+
+    for day in trading_days:
+        ridx = rebalance_dates.searchsorted(day, side="right") - 1
+        universe = universe_by_period[ridx][1] if ridx >= 0 else []
+
+        # --- exits: stop first (conservative), then target ---
+        for sym in list(positions.keys()):
+            if sym not in daily_low.columns or sym not in daily_open.columns or sym not in daily_high.columns:
+                continue
+            if day not in daily_low.index:
+                continue
+            today_low = daily_low.at[day, sym]
+            today_high = daily_high.at[day, sym]
+            today_open = daily_open.at[day, sym]
+            if pd.isna(today_low) or pd.isna(today_high) or pd.isna(today_open):
+                continue
+
+            pos = positions[sym]
+            current_stop = stop_level_for(sym, day, pos["entry_price"])
+            exit_price = None
+            exit_reason = None
+
+            if pd.notna(current_stop) and today_low <= current_stop:
+                exit_price = min(today_open, current_stop)
+                exit_reason = exit_mode
+            elif today_high >= pos["target_price"]:
+                exit_price = max(today_open, pos["target_price"])
+                exit_reason = "target"
+
+            if exit_price is not None and exit_price > 0:
+                qty = pos["qty"]
+                cash += qty * exit_price
+                pnl_rs = qty * (exit_price - pos["entry_price"])
+                trades.append({
+                    "symbol": sym, "entry_date": pos["entry_date"], "entry_price": pos["entry_price"],
+                    "stop_price": pos["stop_price"], "target_price": pos["target_price"],
+                    "exit_date": day, "exit_price": exit_price, "exit_reason": exit_reason,
+                    "qty": qty, "risked_rs": pos["risked_rs"],
+                    "pnl_rs": pnl_rs, "pnl_pct": exit_price / pos["entry_price"] - 1,
+                    "r_multiple": pnl_rs / pos["risked_rs"] if pos["risked_rs"] > 0 else np.nan,
+                    "hold_days": (day - pos["entry_date"]).days, "status": "closed",
+                })
+                del positions[sym]
+
+        # --- entries ---
+        for sym in universe:
+            if sym in positions:
+                continue
+            if sym not in daily_open.columns or day not in daily_open.index:
+                continue
+            today_open = daily_open.at[day, sym]
+            if pd.isna(today_open) or today_open <= 0:
+                continue
+
+            entry_price = None
+            if entry_strategy == "gap_up":
+                yc = prev_close.at[day, sym] if sym in prev_close.columns and day in prev_close.index else np.nan
+                if pd.notna(yc) and yc > 0 and today_open >= yc * (1 + gap_pct / 100.0):
+                    entry_price = today_open
+            else:  # donchian
+                today_high = daily_high.at[day, sym] if sym in daily_high.columns and day in daily_high.index else np.nan
+                dh = donchian_entry_upper.at[day, sym] if sym in donchian_entry_upper.columns and day in donchian_entry_upper.index else np.nan
+                if pd.notna(today_high) and pd.notna(dh) and today_high >= dh:
+                    entry_price = max(today_open, dh)
+
+            if entry_price is None or entry_price <= 0:
+                continue
+
+            initial_stop = stop_level_for(sym, day, entry_price)
+            if pd.isna(initial_stop) or initial_stop >= entry_price:
+                continue  # can't size a trade with zero/negative/undefined risk
+
+            risk_per_share = entry_price - initial_stop
+            risk_amount = capital_base * risk_pct / 100.0
+            max_position_value = capital_base * max_position_pct / 100.0
+            qty = risk_amount / risk_per_share
+            qty = min(qty, max_position_value / entry_price, cash / entry_price)
+            if qty <= 0:
+                continue
+
+            target_price = entry_price + risk_reward_ratio * risk_per_share
+            cash -= qty * entry_price
+            positions[sym] = {
+                "entry_date": day, "entry_price": entry_price, "qty": qty,
+                "stop_price": initial_stop, "target_price": target_price,
+                "risked_rs": qty * risk_per_share,
+            }
+
+        # --- mark to market ---
+        mtm = cash
+        for sym, pos in positions.items():
+            px = daily_close.at[day, sym] if sym in daily_close.columns and day in daily_close.index else np.nan
+            mtm += pos["qty"] * (px if pd.notna(px) else pos["entry_price"])
+        equity_series.at[day] = mtm
+
+    # still-open positions at the end -> unrealized, included in the trade log
+    for sym, pos in positions.items():
+        px = daily_close.at[trading_days[-1], sym] if sym in daily_close.columns else np.nan
+        if pd.isna(px):
+            continue
+        qty = pos["qty"]
+        pnl_rs = qty * (px - pos["entry_price"])
+        trades.append({
+            "symbol": sym, "entry_date": pos["entry_date"], "entry_price": pos["entry_price"],
+            "stop_price": pos["stop_price"], "target_price": pos["target_price"],
+            "exit_date": pd.NaT, "exit_price": px, "exit_reason": "open",
+            "qty": qty, "risked_rs": pos["risked_rs"],
+            "pnl_rs": pnl_rs, "pnl_pct": px / pos["entry_price"] - 1,
+            "r_multiple": pnl_rs / pos["risked_rs"] if pos["risked_rs"] > 0 else np.nan,
+            "hold_days": (trading_days[-1] - pos["entry_date"]).days, "status": "open",
+        })
+
+    trades_df = pd.DataFrame(trades)
+    if not trades_df.empty:
+        trades_df = trades_df.sort_values("entry_date").reset_index(drop=True)
+
+    return {
+        "trades": trades_df,
+        "equity": equity_series,
+        "n_universe_periods": len(universe_by_period),
+        "capital_base": capital_base,
+    }

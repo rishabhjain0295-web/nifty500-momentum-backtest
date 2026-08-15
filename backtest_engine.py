@@ -112,6 +112,38 @@ def load_daily_prices(price_col: str = "Adj Close") -> tuple[pd.DataFrame, pd.Da
     return daily_close, daily_open
 
 
+def load_daily_ohlc() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Loads raw (unadjusted) daily Open/High/Low/Close for every stock --
+    used by swing_engine.py, which trades on actual price action (gaps,
+    N-day highs/lows) rather than total-return series. Deliberately uses
+    'Close', not 'Adj Close': gaps and Donchian channels are about what a
+    trader actually saw on the chart, and mixing an adjusted close with raw
+    High/Low would misalign around dividend/split dates."""
+    open_frames, high_frames, low_frames, close_frames = {}, {}, {}, {}
+    for f in STOCKS_DIR.glob("*.csv"):
+        sym = f.stem
+        try:
+            df = pd.read_csv(f, index_col=0, parse_dates=True)
+        except Exception:
+            continue
+        if not {"Open", "High", "Low", "Close"}.issubset(df.columns) or df.empty:
+            continue
+        o, h, l, c = df["Open"].dropna(), df["High"].dropna(), df["Low"].dropna(), df["Close"].dropna()
+        if o.empty or h.empty or l.empty or c.empty:
+            continue
+        open_frames[sym] = o
+        high_frames[sym] = h
+        low_frames[sym] = l
+        close_frames[sym] = c
+    if not close_frames:
+        raise RuntimeError(f"No usable daily OHLC data found in {STOCKS_DIR}")
+    daily_open = pd.DataFrame(open_frames).sort_index()
+    daily_high = pd.DataFrame(high_frames).sort_index()
+    daily_low = pd.DataFrame(low_frames).sort_index()
+    daily_close = pd.DataFrame(close_frames).sort_index()
+    return daily_open, daily_high, daily_low, daily_close
+
+
 def load_benchmark(price_col: str = "Adj Close") -> pd.Series:
     f = INDEX_DIR / "NIFTY500.csv"
     df = pd.read_csv(f, index_col=0, parse_dates=True)
