@@ -12,6 +12,7 @@ from backtest_engine import (
     load_current_universe,
     load_daily_prices,
     load_gold_series,
+    load_liquid_series,
     load_membership_matrix,
     load_prices,
 )
@@ -45,3 +46,8 @@ def cached_load_membership(dates: tuple, symbols: tuple) -> pd.DataFrame:
 @st.cache_data(show_spinner="Loading current Nifty 500 constituent list...")
 def cached_load_current_universe() -> pd.DataFrame:
     return load_current_universe()
+
+
+@st.cache_data(show_spinner="Loading liquid fund (LIQUIDBEES) price history...")
+def cached_load_liquid(price_col: str) -> pd.Series:
+    return load_liquid_series(price_col)

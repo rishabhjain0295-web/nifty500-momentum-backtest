@@ -130,6 +130,17 @@ def load_gold_series(price_col: str = "Adj Close") -> pd.Series:
     return s.resample("ME").last()
 
 
+def load_liquid_series(price_col: str = "Adj Close") -> pd.Series:
+    """LIQUIDBEES (Nippon India ETF Liquid BeES) as a proxy for a liquid/
+    money-market fund -- used by the SIP simulator (sip_engine.py) as the
+    defensive sleeve for the dynamic allocation mode."""
+    f = ETF_DIR / "LIQUIDBEES.csv"
+    df = pd.read_csv(f, index_col=0, parse_dates=True)
+    col = price_col if price_col in df.columns else "Close"
+    s = df[col].dropna().sort_index()
+    return s.resample("ME").last()
+
+
 def load_current_universe() -> pd.DataFrame:
     """The CURRENT Nifty 500 constituent list (Company Name, Symbol, ...),
     from data/nifty500_list.csv (see scripts/get_nifty500_list.py). Used by
