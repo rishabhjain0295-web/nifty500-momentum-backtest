@@ -11,9 +11,10 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from backtest_engine import ensure_stock_data, run_backtest
+from backtest_engine import apply_execution_lag, ensure_stock_data, run_backtest
 from sip_engine import simulate_dynamic_sip, simulate_plain_sip
 from streamlit_cache import (
+    cached_load_daily_prices,
     cached_load_liquid,
     cached_load_membership,
     cached_load_prices,
@@ -28,8 +29,8 @@ st.title("SIP Simulator")
 st.caption(
     "Compares a plain monthly SIP into the momentum strategy against a dynamic version "
     "that splits between the strategy and a liquid fund, going all-in on the strategy "
-    "during drawdowns. Runs on the core momentum strategy (rank/select/exit-band) -- "
-    "stoploss, T+1 execution, and the gold regime filter from the Backtest page aren't "
+    "during drawdowns. Runs on the core momentum strategy (rank/select/exit-band/T+1 "
+    "execution) -- stoploss and the gold regime filter from the Backtest page aren't "
     "included here yet."
 )
 
@@ -52,6 +53,16 @@ with st.sidebar:
         exit_band_pct = st.slider("Exit threshold (% beyond N)", min_value=0, max_value=300, value=80, step=10)
         exit_rank_preview = int(round(n_stocks * (1 + exit_band_pct / 100)))
         st.caption(f"With {n_stocks} stocks and {exit_band_pct}%, exit rank is {exit_rank_preview}.")
+
+    use_execution_lag = st.checkbox(
+        "T+1 execution (signal at month-end close, trade at next open)", value=False,
+        help="Realistic execution timing: the rebalance ranking is still computed from the "
+             "month-end close (unchanged), but entries and exits are executed on the NEXT "
+             "trading day. A stock being dropped is held (and keeps accruing return) through "
+             "that next day's open, where it's sold; a stock being added is bought at that "
+             "open, so it only starts accruing return from there. Requires daily price data "
+             "(a bit slower to compute)."
+    )
 
     st.header("Universe & data")
     price_col = st.selectbox("Price field", ["Adj Close", "Close"], index=0)
@@ -88,6 +99,13 @@ strat_rets, holdings_history = run_backtest(
     monthly_prices, membership, lookback_months, skip_months, hold_months, n_stocks, min_price,
     use_exit_band, exit_band_pct,
 )
+
+if use_execution_lag and len(strat_rets) > 0:
+    daily_close, daily_open = cached_load_daily_prices(price_col)
+    exec_lag_overlay = apply_execution_lag(monthly_prices, daily_close, daily_open, holdings_history)
+    for m_date, r in exec_lag_overlay.items():
+        if m_date in strat_rets.index:
+            strat_rets.loc[m_date] = r
 
 if len(strat_rets) == 0:
     st.warning(
