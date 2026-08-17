@@ -13,10 +13,12 @@ from backtest_engine import (
     load_daily_ohlc,
     load_daily_prices,
     load_gold_series,
+    load_hourly_ohlc,
     load_liquid_series,
     load_membership_matrix,
     load_prices,
 )
+from ema_rs_rotation_engine import load_data as load_ema_rs_data
 
 
 @st.cache_data(show_spinner="Loading stock price history...")
@@ -57,3 +59,13 @@ def cached_load_liquid(price_col: str) -> pd.Series:
 @st.cache_data(show_spinner="Loading daily OHLC history for swing trading (this can take ~20s)...")
 def cached_load_daily_ohlc() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     return load_daily_ohlc()
+
+
+@st.cache_data(show_spinner="Loading hourly price history for the EMA swing strategy...")
+def cached_load_hourly_ohlc() -> tuple[pd.DataFrame, pd.DataFrame]:
+    return load_hourly_ohlc()
+
+
+@st.cache_data(show_spinner="Loading spot index / ETF price history...")
+def cached_load_ema_rs_data(equity_leg: str, price_col: str) -> tuple[pd.Series, dict, str]:
+    return load_ema_rs_data(equity_leg, price_col)

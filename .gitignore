@@ -1,5 +1,7 @@
 data/stocks/
+data/hourly/
 data/*.zip
+data/failed_hourly_symbols.txt
 __pycache__/
 *.pyc
 .streamlit/secrets.toml

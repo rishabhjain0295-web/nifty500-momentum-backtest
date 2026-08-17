@@ -31,34 +31,52 @@ ROOT = Path(__file__).resolve().parent
 STOCKS_DIR = ROOT / "data" / "stocks"
 INDEX_DIR = ROOT / "data" / "index"
 ETF_DIR = ROOT / "data" / "etfs"
+HOURLY_DIR = ROOT / "data" / "hourly"
 MEMBERSHIP_CSV = ROOT / "data" / "nifty500_membership_calendar.csv"
 
-# data/stocks/ is too large (300MB+) to commit to git -- it's fetched from a
-# GitHub Release asset on first run instead. Set via the DATA_ARCHIVE_URL
-# environment variable (or Streamlit secrets) in deployment; falls back to
-# this constant, which must be updated after the release is created.
+# data/stocks/ and data/hourly/ are too large to commit to git -- both are
+# fetched from GitHub Release assets on first run instead. Set via the
+# DATA_ARCHIVE_URL / HOURLY_ARCHIVE_URL environment variables (or Streamlit
+# secrets) in deployment; falls back to these constants, which must be
+# updated after the release is created.
 DATA_ARCHIVE_URL = "https://github.com/rishabhjain0295-web/nifty500-momentum-backtest/releases/download/data-v1/stocks.zip"
+HOURLY_ARCHIVE_URL = "https://github.com/rishabhjain0295-web/nifty500-momentum-backtest/releases/download/data-v1/hourly.zip"
 
 
-def ensure_stock_data(archive_url: str | None = None) -> None:
-    """Download and extract data/stocks/ from a GitHub Release asset if it's
-    not already present -- needed on a fresh cloud container where data/
-    isn't in git. No-op if data/stocks/ already has files (e.g. local dev)."""
+def _ensure_data_from_archive(target_dir: Path, archive_url: str | None, env_var: str, fallback_url: str) -> None:
+    """Shared download/extract logic behind ensure_stock_data and
+    ensure_hourly_data -- fetches a GitHub Release zip asset into target_dir
+    if it isn't already populated. No-op if target_dir already has files
+    (e.g. local dev, where the data was downloaded directly)."""
     import os
     import zipfile
     from io import BytesIO
 
     import requests
 
-    if STOCKS_DIR.exists() and any(STOCKS_DIR.glob("*.csv")):
+    if target_dir.exists() and any(target_dir.glob("*.csv")):
         return
 
-    url = archive_url or os.environ.get("DATA_ARCHIVE_URL") or DATA_ARCHIVE_URL
-    STOCKS_DIR.mkdir(parents=True, exist_ok=True)
+    url = archive_url or os.environ.get(env_var) or fallback_url
+    target_dir.mkdir(parents=True, exist_ok=True)
     resp = requests.get(url, timeout=120)
     resp.raise_for_status()
     with zipfile.ZipFile(BytesIO(resp.content)) as zf:
-        zf.extractall(STOCKS_DIR)
+        zf.extractall(target_dir)
+
+
+def ensure_stock_data(archive_url: str | None = None) -> None:
+    """Download and extract data/stocks/ from a GitHub Release asset if it's
+    not already present -- needed on a fresh cloud container where data/
+    isn't in git. No-op if data/stocks/ already has files (e.g. local dev)."""
+    _ensure_data_from_archive(STOCKS_DIR, archive_url, "DATA_ARCHIVE_URL", DATA_ARCHIVE_URL)
+
+
+def ensure_hourly_data(archive_url: str | None = None) -> None:
+    """Download and extract data/hourly/ (used by the EMA-crossover swing
+    strategy's hourly variant) from a GitHub Release asset if it's not
+    already present. No-op if data/hourly/ already has files."""
+    _ensure_data_from_archive(HOURLY_DIR, archive_url, "HOURLY_ARCHIVE_URL", HOURLY_ARCHIVE_URL)
 
 
 def load_prices(price_col: str = "Adj Close") -> pd.DataFrame:
@@ -142,6 +160,42 @@ def load_daily_ohlc() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Data
     daily_low = pd.DataFrame(low_frames).sort_index()
     daily_close = pd.DataFrame(close_frames).sort_index()
     return daily_open, daily_high, daily_low, daily_close
+
+
+def load_hourly_ohlc() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Loads hourly Open/Close from data/hourly/ (see
+    scripts/download_hourly_data.py) for the hourly EMA-crossover swing
+    strategy. Only Open/Close are needed (the EMA strategy trades on
+    closes and fills at opens, no high/low channel logic), and only ~216
+    symbols exist here -- whichever stocks appeared in the top-30 momentum
+    universe within Yahoo Finance's ~2-3 year hourly data window, not the
+    full ~970-symbol daily universe. Timestamps are converted from IST
+    (+05:30, as downloaded) to naive local wall-clock time, matching the
+    naive DatetimeIndex convention used by the daily loaders -- comparing
+    a tz-aware and a tz-naive index would raise, and the monthly rebalance
+    calendar this gets aligned against is itself naive.
+    """
+    open_frames, close_frames = {}, {}
+    for f in HOURLY_DIR.glob("*.csv"):
+        sym = f.stem
+        try:
+            df = pd.read_csv(f, index_col=0, parse_dates=True)
+        except Exception:
+            continue
+        if not {"Open", "Close"}.issubset(df.columns) or df.empty:
+            continue
+        if df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
+        o, c = df["Open"].dropna(), df["Close"].dropna()
+        if o.empty or c.empty:
+            continue
+        open_frames[sym] = o
+        close_frames[sym] = c
+    if not close_frames:
+        raise RuntimeError(f"No usable hourly data found in {HOURLY_DIR}")
+    hourly_open = pd.DataFrame(open_frames).sort_index()
+    hourly_close = pd.DataFrame(close_frames).sort_index()
+    return hourly_open, hourly_close
 
 
 def load_benchmark(price_col: str = "Adj Close") -> pd.Series:
