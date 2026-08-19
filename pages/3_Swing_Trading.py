@@ -1,12 +1,18 @@
 """
-Swing trading: scans the top-N momentum universe (same ranking as the
-Backtest page) each month for entries, trades them individually with
-risk-based position sizing. Two strategy families are offered:
-breakout (gap-up / Donchian channel, with an R-multiple profit target)
-and EMA 15/50 crossover (trend-following, daily or hourly bars, no fixed
-target -- see run_ema_crossover_backtest's docstring for the hourly data
-history caveat). See swing_engine.py for the full mechanics and the
-design assumptions made where the source spec was ambiguous.
+Swing trading: scans a momentum-ranked universe (same ranking formula as
+the Backtest page) each month for entries, trades them individually
+instead of holding a rebalanced basket. Three strategy families:
+  - Breakout (gap-up / Donchian channel), long, top-N momentum, with an
+    R-multiple profit target.
+  - EMA 15/50 crossover, long, top-N momentum, daily or hourly bars, no
+    fixed target -- see run_ema_crossover_backtest's docstring for the
+    hourly data history caveat.
+  - Short Momentum (F&O), short, BOTTOM-N (weakest) momentum among
+    F&O-eligible stocks only, hourly or 2-hourly bars, no fixed target --
+    see run_short_ema_crossover_backtest's docstring for the shorting
+    simplification this implies.
+See swing_engine.py for the full mechanics and the design assumptions
+made where the source spec was ambiguous.
 """
 import pandas as pd
 import plotly.graph_objects as go
@@ -14,12 +20,18 @@ import streamlit as st
 
 from backtest_engine import ensure_hourly_data, ensure_stock_data
 from streamlit_cache import (
+    cached_load_2h_ohlc,
     cached_load_daily_ohlc,
+    cached_load_fno_symbols,
     cached_load_hourly_ohlc,
     cached_load_membership,
     cached_load_prices,
 )
-from swing_engine import run_ema_crossover_backtest, run_swing_backtest
+from swing_engine import (
+    run_ema_crossover_backtest,
+    run_short_ema_crossover_backtest,
+    run_swing_backtest,
+)
 
 st.set_page_config(page_title="Nifty 500 Swing Trading", layout="wide")
 
@@ -36,8 +48,20 @@ st.caption(
 )
 
 with st.sidebar:
+    st.header("Strategy")
+    strategy_label = st.radio(
+        "Strategy type",
+        ["Breakout (gap-up / Donchian)", "EMA 15/50 crossover", "Short Momentum (F&O)"],
+        index=0,
+    )
+    is_ema = strategy_label == "EMA 15/50 crossover"
+    is_short = strategy_label == "Short Momentum (F&O)"
+
     st.header("Momentum universe")
-    n_stocks = st.slider("Number of stocks in universe", min_value=5, max_value=100, value=20, step=5)
+    n_stocks = st.slider(
+        "Number of stocks in universe", min_value=5, max_value=100, value=20, step=5,
+        help="For Short Momentum this is the WEAKEST N stocks by trailing return, not the strongest."
+    )
     lookback_months = st.slider("Ranking lookback (months)", min_value=1, max_value=24, value=10, step=1)
     skip_months = st.slider(
         "Skip period (months)", min_value=0, max_value=3, value=1, step=1,
@@ -46,16 +70,18 @@ with st.sidebar:
     price_col = st.selectbox("Price field for ranking", ["Adj Close", "Close"], index=0)
     min_price = st.number_input("Minimum price filter (Rs)", min_value=0.0, value=10.0, step=5.0)
     use_membership_filter = st.checkbox("Enforce point-in-time index membership", value=True)
-
-    st.header("Strategy")
-    strategy_label = st.radio(
-        "Strategy type", ["Breakout (gap-up / Donchian)", "EMA 15/50 crossover"], index=0
-    )
-    is_ema = strategy_label == "EMA 15/50 crossover"
+    if is_short:
+        st.caption(
+            "Also restricted to currently F&O-eligible stocks (~208 names) -- shorting "
+            "individual equities isn't viable in the Indian cash market, only via stock "
+            "futures. This is a CURRENT F&O list applied across all history, not a "
+            "point-in-time one (see get_fno_list.py)."
+        )
 
     timeframe = "Daily"
     ema_fast = 15
     ema_slow = 50
+    max_entries = 10
     entry_strategy = "gap_up"
     gap_pct = 1.0
     donchian_entry_lookback = 20
@@ -64,7 +90,24 @@ with st.sidebar:
     stop_pct = 8.0
     risk_reward_ratio = 2.0
 
-    if is_ema:
+    if is_short:
+        st.header("Short Momentum (F&O)")
+        timeframe = st.radio("Timeframe", ["Hourly (~2-3 years)", "2-Hourly (~2-3 years)"], index=0)
+        st.caption(
+            "Yahoo Finance only serves hourly data for roughly the trailing 2-3 years, unlike "
+            "the daily data used elsewhere in this app which goes back to 2008. 2-Hourly bars "
+            "are built by pairing consecutive hourly bars within each trading day (see "
+            "backtest_engine.load_2h_ohlc), so they share the same ~2-3 year window."
+        )
+        ema_fast = st.number_input("Fast EMA span (bars)", min_value=2, max_value=100, value=15, step=1)
+        ema_slow = st.number_input("Slow EMA span (bars)", min_value=5, max_value=300, value=50, step=1)
+        st.caption(
+            "Entry (short): fast EMA below slow EMA at a bar's close, filled at the next bar's "
+            "open. Exit (cover): EITHER close above slow EMA OR fast EMA above slow EMA, also "
+            "filled at the next bar's open -- checked every bar for the life of the trade. No "
+            "fixed profit target."
+        )
+    elif is_ema:
         st.header("EMA crossover")
         timeframe = st.radio(
             "Timeframe", ["Daily (full history)", "Hourly (~2-3 years only)"], index=0
@@ -115,31 +158,63 @@ with st.sidebar:
             stop_pct = st.slider("Fixed stoploss (% below entry)", min_value=0.5, max_value=30.0, value=8.0, step=0.5)
 
     st.header("Risk & money management")
-    capital_base = st.number_input("Starting capital (Rs)", min_value=100_000.0, value=1_000_000.0, step=100_000.0)
-    risk_pct = st.slider(
-        "Risk per trade (% of capital)", min_value=0.1, max_value=5.0, value=1.0, step=0.1,
-        help="Position size is set so a stop-out loses exactly this % of starting capital -- "
-             "subject to the position-size cap below, which usually binds first on tight stops."
-    )
-    if not is_ema:
-        risk_reward_ratio = st.number_input(
-            "Risk:reward ratio (target = entry + this x risk)", min_value=0.5, max_value=20.0, value=2.0, step=0.5,
-            help="E.g. 2.0 = 1:2 -- target is twice the initial risk distance above entry. 10.0 = 1:10."
+    if is_short:
+        capital_base = st.number_input(
+            "Starting capital (Rs)", min_value=100_000.0, value=2_000_000.0, step=100_000.0
         )
-    max_position_pct = st.slider(
-        "Max position size (% of capital)", min_value=1.0, max_value=100.0, value=20.0, step=1.0,
-        help="A hard ceiling on any single position's value. Necessary because pure risk-based "
-             "sizing can demand a huge position when the stop is tight -- e.g. a 1% stop distance "
-             "needs a position worth 100% of capital just to risk 1%. This cap (not risk_pct) is "
-             "usually what actually determines position size on tight-stop setups."
-    )
+        max_entries = st.slider(
+            "Max concurrent short positions", min_value=1, max_value=30, value=10, step=1,
+            help="Each open slot gets an equal share of starting capital as notional (capital / "
+                 "this number), fixed regardless of stop distance -- not risk-based sizing like "
+                 "the other two strategies, since the spec here is capital + a slot count."
+        )
+        risk_pct, max_position_pct = 1.0, 20.0  # unused by the short engine; kept defined for downstream code
+    else:
+        capital_base = st.number_input("Starting capital (Rs)", min_value=100_000.0, value=1_000_000.0, step=100_000.0)
+        risk_pct = st.slider(
+            "Risk per trade (% of capital)", min_value=0.1, max_value=5.0, value=1.0, step=0.1,
+            help="Position size is set so a stop-out loses exactly this % of starting capital -- "
+                 "subject to the position-size cap below, which usually binds first on tight stops."
+        )
+        if not is_ema:
+            risk_reward_ratio = st.number_input(
+                "Risk:reward ratio (target = entry + this x risk)", min_value=0.5, max_value=20.0, value=2.0, step=0.5,
+                help="E.g. 2.0 = 1:2 -- target is twice the initial risk distance above entry. 10.0 = 1:10."
+            )
+        max_position_pct = st.slider(
+            "Max position size (% of capital)", min_value=1.0, max_value=100.0, value=20.0, step=1.0,
+            help="A hard ceiling on any single position's value. Necessary because pure risk-based "
+                 "sizing can demand a huge position when the stop is tight -- e.g. a 1% stop distance "
+                 "needs a position worth 100% of capital just to risk 1%. This cap (not risk_pct) is "
+                 "usually what actually determines position size on tight-stop setups."
+        )
 
 monthly_prices = cached_load_prices(price_col)
 membership = None
 if use_membership_filter:
     membership = cached_load_membership(tuple(monthly_prices.index.values), tuple(monthly_prices.columns))
 
-if is_ema:
+if is_short:
+    fno_symbols = cached_load_fno_symbols()
+    with st.spinner("Fetching hourly price data (first run only)..."):
+        ensure_hourly_data()
+    if timeframe.startswith("2-Hourly"):
+        with st.spinner("Running Short Momentum backtest (2-hourly bars, ~2-3 year window)..."):
+            bar_open, bar_close = cached_load_2h_ohlc()
+            result = run_short_ema_crossover_backtest(
+                monthly_prices, membership, bar_open, bar_close, fno_symbols,
+                lookback_months, skip_months, n_stocks, min_price,
+                ema_fast, ema_slow, max_entries, capital_base,
+            )
+    else:
+        with st.spinner("Running Short Momentum backtest (hourly bars, ~2-3 year window)..."):
+            bar_open, bar_close = cached_load_hourly_ohlc()
+            result = run_short_ema_crossover_backtest(
+                monthly_prices, membership, bar_open, bar_close, fno_symbols,
+                lookback_months, skip_months, n_stocks, min_price,
+                ema_fast, ema_slow, max_entries, capital_base,
+            )
+elif is_ema:
     if timeframe.startswith("Hourly"):
         with st.spinner("Fetching hourly price data (first run only)..."):
             ensure_hourly_data()
@@ -175,8 +250,8 @@ equity = result["equity"]
 if trades.empty or equity.empty:
     st.warning(
         "No trades were generated with these parameters -- try a lower gap threshold, a "
-        "shorter Donchian lookback, a larger universe, or (for the EMA strategy) a shorter "
-        "fast/slow span."
+        "shorter Donchian lookback, a larger universe, or (for the EMA/Short Momentum "
+        "strategies) a shorter fast/slow EMA span."
     )
     st.stop()
 
@@ -300,11 +375,22 @@ with st.expander("Trade log"):
     )
 
 st.divider()
-st.caption(
-    f"Universe recomputed at {result['n_universe_periods']} monthly rebalance points using the "
-    "same ranking formula as the Backtest page (compute_momentum_ranking), so this can't drift "
-    "out of sync with it. Position sizing is risk-based (see sidebar), not equal-weight -- "
-    "actual position values vary trade to trade depending on stop distance, capped by the "
-    "max-position-size setting. Idle cash between trades earns 0% (a simplification). Costs, "
-    "taxes, and slippage are not modeled here yet."
-)
+if is_short:
+    st.caption(
+        f"Universe recomputed at {result['n_universe_periods']} monthly rebalance points using the "
+        "same ranking formula as the Backtest page (compute_momentum_ranking), restricted to "
+        "F&O-eligible stocks and taking the WEAKEST names instead of the strongest. Position "
+        "sizing is equal notional per slot (starting capital / max concurrent positions), not "
+        "risk-based. Modeled as directly shorting the stock at its spot price -- economically "
+        "close to a fully-margined stock future, but ignoring real futures mechanics (lot sizes, "
+        "margin, rollover, futures-spot basis). Costs, taxes, and slippage are not modeled here yet."
+    )
+else:
+    st.caption(
+        f"Universe recomputed at {result['n_universe_periods']} monthly rebalance points using the "
+        "same ranking formula as the Backtest page (compute_momentum_ranking), so this can't drift "
+        "out of sync with it. Position sizing is risk-based (see sidebar), not equal-weight -- "
+        "actual position values vary trade to trade depending on stop distance, capped by the "
+        "max-position-size setting. Idle cash between trades earns 0% (a simplification). Costs, "
+        "taxes, and slippage are not modeled here yet."
+    )

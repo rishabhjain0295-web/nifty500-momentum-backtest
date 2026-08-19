@@ -198,6 +198,31 @@ def load_hourly_ohlc() -> tuple[pd.DataFrame, pd.DataFrame]:
     return hourly_open, hourly_close
 
 
+def load_2h_ohlc() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Resamples load_hourly_ohlc()'s bars into 2-hour bars, for the Short
+    Momentum (F&O) swing strategy's "2 hourly" timeframe option. NSE's
+    session doesn't start on an even clock hour (9:15, not 9:00), so a
+    plain pandas .resample('2h') would misalign against the actual hourly
+    bars (typically ~9:15/10:15/11:15/12:15/13:15/14:15/15:15). Instead we
+    pair up each day's hourly bars in trading order starting from that
+    day's first bar -- (9:15,10:15), (11:15,12:15), (13:15,14:15), (15:15)
+    -- open = the pair's first bar's open, close = the pair's last bar's
+    close, labeled with the last bar's timestamp.
+    """
+    hourly_open, hourly_close = load_hourly_ohlc()
+    day = pd.Series(hourly_close.index.date, index=hourly_close.index)
+    pair_seq = hourly_close.groupby(day).cumcount() // 2
+    pair_key = day.astype(str) + "_" + pair_seq.astype(str)
+    bar_ts = pd.Series(hourly_close.index, index=hourly_close.index)
+
+    label = bar_ts.groupby(pair_key).last()
+    open_2h = hourly_open.groupby(pair_key).first()
+    close_2h = hourly_close.groupby(pair_key).last()
+    open_2h.index = label.reindex(open_2h.index).values
+    close_2h.index = label.reindex(close_2h.index).values
+    return open_2h.sort_index(), close_2h.sort_index()
+
+
 def load_benchmark(price_col: str = "Adj Close") -> pd.Series:
     f = INDEX_DIR / "NIFTY500.csv"
     df = pd.read_csv(f, index_col=0, parse_dates=True)
@@ -237,6 +262,20 @@ def load_current_universe() -> pd.DataFrame:
     constituents and shouldn't show up in a live ranking."""
     f = ROOT / "data" / "nifty500_list.csv"
     return pd.read_csv(f)
+
+
+def load_fno_symbols() -> set[str]:
+    """Current NSE F&O (futures & options) eligible stock symbols, from
+    data/fno_stocks.csv (see scripts/get_fno_list.py). Used by the Short
+    Momentum (F&O) swing strategy to restrict its universe to stocks that
+    actually have tradeable stock futures -- shorting isn't otherwise
+    viable for individual equities in the Indian cash market. Like
+    load_current_universe, this is a CURRENT snapshot applied across all
+    history, not a point-in-time calendar (a stock's F&O eligibility does
+    change over time, but NSE doesn't publish a historical version of this
+    list the way it does index membership)."""
+    f = ROOT / "data" / "fno_stocks.csv"
+    return set(pd.read_csv(f)["Symbol"])
 
 
 def compute_momentum_ranking(

@@ -7,3 +7,5 @@ __pycache__/
 .streamlit/secrets.toml
 download_log.txt
 download_historical_log.txt
+download_hourly_log.txt
+download_fno_hourly_log.txt

@@ -74,20 +74,35 @@ def _build_universe_calendar(
     skip_months: int,
     n_stocks: int,
     min_price: float,
+    allowed_symbols: set[str] | None = None,
+    weakest: bool = False,
 ) -> list[tuple[pd.Timestamp, list[str]]]:
-    """Top n_stocks by momentum rank at each monthly rebalance date -- the
-    shared universe-selection logic behind every swing strategy in this
-    module, so they can never rank differently from each other or from the
-    Backtest page (all three call compute_momentum_ranking directly)."""
+    """Top (or, if weakest=True, bottom) n_stocks by momentum rank at each
+    monthly rebalance date -- the shared universe-selection logic behind
+    every swing strategy in this module, so they can never rank differently
+    from each other or from the Backtest page (all call
+    compute_momentum_ranking directly).
+
+    allowed_symbols, if given, restricts the ranking universe BEFORE taking
+    the top/bottom n_stocks -- e.g. the Short Momentum (F&O) strategy only
+    trades stocks that actually have tradeable stock futures, not the full
+    momentum universe. weakest=True picks the n_stocks with the LOWEST
+    trailing return instead of the highest (compute_momentum_ranking always
+    returns descending-sorted, so this just reads from the tail)."""
     monthly_dates = monthly_prices.index
     min_history_months = lookback_months + skip_months + 1
     universe_by_period: list[tuple[pd.Timestamp, list[str]]] = []
     for i in range(min_history_months, len(monthly_dates)):
         today = monthly_dates[i]
         ranked = compute_momentum_ranking(monthly_prices, membership, today, lookback_months, skip_months, min_price)
-        if ranked is None or len(ranked) < n_stocks:
+        if ranked is None:
             continue
-        universe_by_period.append((today, ranked.head(n_stocks).index.tolist()))
+        if allowed_symbols is not None:
+            ranked = ranked[ranked.index.isin(allowed_symbols)]
+        if len(ranked) < n_stocks:
+            continue
+        picked = ranked.tail(n_stocks).index.tolist() if weakest else ranked.head(n_stocks).index.tolist()
+        universe_by_period.append((today, picked))
     return universe_by_period
 
 
@@ -454,6 +469,205 @@ def run_ema_crossover_backtest(
             "stop_price": pos["stop_price"], "exit_date": pd.NaT, "exit_price": px,
             "exit_reason": "open", "qty": qty, "risked_rs": pos["risked_rs"],
             "pnl_rs": pnl_rs, "pnl_pct": px / pos["entry_price"] - 1,
+            "r_multiple": pnl_rs / pos["risked_rs"] if pos["risked_rs"] > 0 else np.nan,
+            "hold_days": (bars[-1] - pos["entry_date"]).days, "status": "open",
+        })
+
+    trades_df = pd.DataFrame(trades)
+    if not trades_df.empty:
+        trades_df = trades_df.sort_values("entry_date").reset_index(drop=True)
+
+    return {
+        "trades": trades_df,
+        "equity": equity_series,
+        "n_universe_periods": len(universe_by_period),
+        "capital_base": capital_base,
+    }
+
+
+def run_short_ema_crossover_backtest(
+    monthly_prices: pd.DataFrame,
+    membership: pd.DataFrame | None,
+    bar_open: pd.DataFrame,
+    bar_close: pd.DataFrame,
+    fno_symbols: set[str],
+    lookback_months: int,
+    skip_months: int,
+    n_stocks: int,
+    min_price: float,
+    ema_fast: int = 15,
+    ema_slow: int = 50,
+    max_entries: int = 10,
+    capital_base: float = 2_000_000.0,
+) -> dict:
+    """Short Momentum (F&O): the mirror image of run_ema_crossover_backtest,
+    short-selling the WEAKEST momentum stocks within the F&O-eligible
+    universe instead of going long the strongest. Timeframe-agnostic --
+    pass hourly or 2h bars via bar_open/bar_close (see
+    backtest_engine.load_2h_ohlc for the 2h resampling).
+
+    Universe: at each monthly rebalance date, the n_stocks LOWEST trailing-
+    return stocks among fno_symbols (real shorting of individual equities
+    isn't allowed in the Indian cash market -- this is only viable via
+    stock futures, hence restricting to F&O-eligible names; see
+    get_fno_list.py). Reuses _build_universe_calendar(weakest=True,
+    allowed_symbols=fno_symbols) so this can't drift out of sync with the
+    long strategy's ranking formula.
+
+    Entry: at the close of any bar where ema_fast < ema_slow, for a
+    universe stock not currently shorted and while fewer than max_entries
+    positions are open. Executed (short sale) at the NEXT bar's open, for
+    the same lookahead reason documented in run_ema_crossover_backtest.
+
+    Exit (cover): at the close of any bar where EITHER the bar's own close
+    is above ema_slow (the spec's "initial" stop -- price recovering past
+    the slow EMA invalidates the downtrend thesis) OR ema_fast has closed
+    above ema_slow (the spec's "trailing" stop), both checked every bar for
+    the life of the position. No fixed profit target. Executed at the next
+    bar's open.
+
+    Position sizing: EQUAL notional per slot (capital_base / max_entries),
+    not risk-based -- the spec here gives a capital figure and a slot count
+    rather than a risk %, so each of the up to max_entries concurrent
+    shorts gets a fixed capital_base / max_entries of notional, sized off
+    entry price. risked_rs (distance from entry to the initial ema_slow
+    stop) is still recorded per trade for R-multiple reporting, it just
+    isn't what determines qty here.
+
+    Simplification: modeled as directly shorting the stock at its spot
+    price (proceeds credited to cash at entry, debited at cover; mark-to-
+    market values the open liability at the current close) -- economically
+    close to a fully-margined stock future position, but ignores real
+    futures mechanics (lot sizes, margin requirements, rollover, futures-
+    spot basis). No slippage or costs modeled, consistent with the rest of
+    this project's swing strategies.
+    """
+    universe_by_period = _build_universe_calendar(
+        monthly_prices, membership, lookback_months, skip_months, n_stocks, min_price,
+        allowed_symbols=fno_symbols, weakest=True,
+    )
+
+    empty = {
+        "trades": pd.DataFrame(columns=["symbol", "entry_date", "entry_price", "stop_price",
+                                         "exit_date", "exit_price", "exit_reason", "qty", "risked_rs",
+                                         "pnl_rs", "pnl_pct", "r_multiple", "hold_days", "status"]),
+        "equity": pd.Series(dtype=float),
+        "n_universe_periods": 0,
+        "capital_base": capital_base,
+    }
+    if not universe_by_period:
+        return empty
+
+    rebalance_dates = pd.DatetimeIndex([u[0] for u in universe_by_period])
+    start_date = rebalance_dates[0]
+    last_bar_date = bar_close.index.max()
+    if last_bar_date <= start_date:
+        return empty
+    bars = bar_close.index[(bar_close.index > start_date) & (bar_close.index <= last_bar_date)]
+    if len(bars) == 0:
+        return empty
+
+    ema_fast_series = bar_close.ewm(span=ema_fast, adjust=False).mean()
+    ema_slow_series = bar_close.ewm(span=ema_slow, adjust=False).mean()
+    notional_per_slot = capital_base / max_entries
+
+    cash = capital_base
+    positions: dict[str, dict] = {}
+    trades: list[dict] = []
+    equity_series = pd.Series(index=bars, dtype=float)
+    pending_entries: dict[str, float] = {}  # symbol -> initial stop (ema_slow at signal bar)
+    pending_exits: dict[str, str] = {}  # symbol -> exit_reason
+
+    for bar in bars:
+        ridx = rebalance_dates.searchsorted(bar, side="right") - 1
+        universe = universe_by_period[ridx][1] if ridx >= 0 else []
+
+        # --- execute signals queued from the PREVIOUS bar, at THIS bar's open ---
+        for sym in list(pending_exits.keys()):
+            reason = pending_exits.pop(sym)
+            if sym not in positions or sym not in bar_open.columns or bar not in bar_open.index:
+                continue
+            open_px = bar_open.at[bar, sym]
+            if pd.isna(open_px) or open_px <= 0:
+                continue
+            pos = positions.pop(sym)
+            qty = pos["qty"]
+            cash -= qty * open_px  # buy to cover
+            pnl_rs = qty * (pos["entry_price"] - open_px)
+            trades.append({
+                "symbol": sym, "entry_date": pos["entry_date"], "entry_price": pos["entry_price"],
+                "stop_price": pos["stop_price"], "exit_date": bar, "exit_price": open_px,
+                "exit_reason": reason, "qty": qty, "risked_rs": pos["risked_rs"],
+                "pnl_rs": pnl_rs, "pnl_pct": 1 - open_px / pos["entry_price"],
+                "r_multiple": pnl_rs / pos["risked_rs"] if pos["risked_rs"] > 0 else np.nan,
+                "hold_days": (bar - pos["entry_date"]).days, "status": "closed",
+            })
+
+        for sym in list(pending_entries.keys()):
+            initial_stop = pending_entries.pop(sym)
+            if sym in positions or len(positions) >= max_entries:
+                continue
+            if sym not in bar_open.columns or bar not in bar_open.index:
+                continue
+            open_px = bar_open.at[bar, sym]
+            if pd.isna(open_px) or open_px <= 0 or initial_stop <= open_px:
+                continue
+            qty = notional_per_slot / open_px
+            risk_per_share = initial_stop - open_px
+            cash += qty * open_px  # short-sale proceeds
+            positions[sym] = {
+                "entry_date": bar, "entry_price": open_px, "qty": qty,
+                "stop_price": initial_stop, "risked_rs": qty * risk_per_share,
+            }
+
+        # --- evaluate THIS bar's close for new signals, queued for next bar ---
+        for sym in list(positions.keys()):
+            if sym in pending_exits or sym not in bar_close.columns or bar not in bar_close.index:
+                continue
+            c = bar_close.at[bar, sym]
+            ef = ema_fast_series.at[bar, sym] if sym in ema_fast_series.columns else np.nan
+            es = ema_slow_series.at[bar, sym] if sym in ema_slow_series.columns else np.nan
+            if pd.isna(c) or pd.isna(ef) or pd.isna(es):
+                continue
+            if c > es:
+                pending_exits[sym] = "close_above_ema_slow"
+            elif ef > es:
+                pending_exits[sym] = "ema_fast_above_ema_slow"
+
+        if len(positions) < max_entries:
+            for sym in universe:
+                if len(positions) + len(pending_entries) >= max_entries:
+                    break
+                if sym in positions or sym in pending_entries:
+                    continue
+                if sym not in bar_close.columns or bar not in bar_close.index:
+                    continue
+                ef = ema_fast_series.at[bar, sym] if sym in ema_fast_series.columns else np.nan
+                es = ema_slow_series.at[bar, sym] if sym in ema_slow_series.columns else np.nan
+                if pd.isna(ef) or pd.isna(es):
+                    continue
+                if ef < es:
+                    pending_entries[sym] = es
+
+        # --- mark to market: cash minus the current cost to cover every open short ---
+        mtm = cash
+        for sym, pos in positions.items():
+            px = bar_close.at[bar, sym] if sym in bar_close.columns and bar in bar_close.index else np.nan
+            mtm -= pos["qty"] * (px if pd.notna(px) else pos["entry_price"])
+        equity_series.at[bar] = mtm
+
+    # still-open positions -> unrealized
+    for sym, pos in positions.items():
+        px = bar_close.at[bars[-1], sym] if sym in bar_close.columns else np.nan
+        if pd.isna(px):
+            continue
+        qty = pos["qty"]
+        pnl_rs = qty * (pos["entry_price"] - px)
+        trades.append({
+            "symbol": sym, "entry_date": pos["entry_date"], "entry_price": pos["entry_price"],
+            "stop_price": pos["stop_price"], "exit_date": pd.NaT, "exit_price": px,
+            "exit_reason": "open", "qty": qty, "risked_rs": pos["risked_rs"],
+            "pnl_rs": pnl_rs, "pnl_pct": 1 - px / pos["entry_price"],
             "r_multiple": pnl_rs / pos["risked_rs"] if pos["risked_rs"] > 0 else np.nan,
             "hold_days": (bars[-1] - pos["entry_date"]).days, "status": "open",
         })

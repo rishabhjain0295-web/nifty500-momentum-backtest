@@ -8,10 +8,12 @@ import pandas as pd
 import streamlit as st
 
 from backtest_engine import (
+    load_2h_ohlc,
     load_benchmark,
     load_current_universe,
     load_daily_ohlc,
     load_daily_prices,
+    load_fno_symbols,
     load_gold_series,
     load_hourly_ohlc,
     load_liquid_series,
@@ -63,3 +65,13 @@ def cached_load_daily_ohlc() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, 
 @st.cache_data(show_spinner="Loading hourly price history for the EMA swing strategy...")
 def cached_load_hourly_ohlc() -> tuple[pd.DataFrame, pd.DataFrame]:
     return load_hourly_ohlc()
+
+
+@st.cache_data(show_spinner="Building 2-hour bars from hourly price history...")
+def cached_load_2h_ohlc() -> tuple[pd.DataFrame, pd.DataFrame]:
+    return load_2h_ohlc()
+
+
+@st.cache_data(show_spinner="Loading F&O eligible stock list...")
+def cached_load_fno_symbols() -> set[str]:
+    return load_fno_symbols()
