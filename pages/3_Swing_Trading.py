@@ -350,8 +350,21 @@ st.dataframe(
     hide_index=True,
 )
 
+has_entry_rank = "entry_rank" in trades.columns
+
 with st.expander("Trade log"):
-    display_cols = ["symbol", "entry_date", "entry_price", "stop_price"]
+    if has_entry_rank:
+        st.caption(
+            "entry_rank = the stock's position (1 = weakest) in the weakest-N F&O universe as "
+            "of the monthly rebalance in effect when the entry SIGNAL fired -- not its rank "
+            "today. A trade can look out of place if you check it later: the universe only "
+            "gates new entries (an open short isn't force-closed when the stock's rank later "
+            "improves), and ranking only updates monthly."
+        )
+    display_cols = ["symbol", "entry_date", "entry_price"]
+    if has_entry_rank:
+        display_cols.append("entry_rank")
+    display_cols.append("stop_price")
     if has_target:
         display_cols.append("target_price")
     display_cols += ["exit_date", "exit_price", "exit_reason", "qty", "risked_rs",

@@ -518,6 +518,17 @@ def run_short_ema_crossover_backtest(
     universe stock not currently shorted and while fewer than max_entries
     positions are open. Executed (short sale) at the NEXT bar's open, for
     the same lookahead reason documented in run_ema_crossover_backtest.
+    Each trade records entry_rank -- the symbol's position (1 = weakest)
+    in the WEAKEST-N universe as of the signal bar's most recent monthly
+    rebalance. Two things can make a later-inspected trade look like it
+    doesn't belong in "the bottom N you selected": (1) the universe only
+    gates NEW entries -- a position stays open on its own stop/trailing-
+    stop logic even after the stock's rank moves away from the bottom N
+    at a later rebalance, so an old open trade can show a currently-
+    unremarkable rank; (2) ranking is monthly, so a trade entered right
+    at a rebalance boundary uses the OLD month's rank if the signal fired
+    just before the boundary, not the new month's -- entry_rank always
+    reflects the rank actually used at signal time, not "now".
 
     Exit (cover): at the close of any bar where EITHER the bar's own close
     is above ema_slow (the spec's "initial" stop -- price recovering past
@@ -548,7 +559,7 @@ def run_short_ema_crossover_backtest(
     )
 
     empty = {
-        "trades": pd.DataFrame(columns=["symbol", "entry_date", "entry_price", "stop_price",
+        "trades": pd.DataFrame(columns=["symbol", "entry_date", "entry_price", "entry_rank", "stop_price",
                                          "exit_date", "exit_price", "exit_reason", "qty", "risked_rs",
                                          "pnl_rs", "pnl_pct", "r_multiple", "hold_days", "status"]),
         "equity": pd.Series(dtype=float),
@@ -575,12 +586,16 @@ def run_short_ema_crossover_backtest(
     positions: dict[str, dict] = {}
     trades: list[dict] = []
     equity_series = pd.Series(index=bars, dtype=float)
-    pending_entries: dict[str, float] = {}  # symbol -> initial stop (ema_slow at signal bar)
+    pending_entries: dict[str, tuple[float, int]] = {}  # symbol -> (initial stop, rank at signal)
     pending_exits: dict[str, str] = {}  # symbol -> exit_reason
 
     for bar in bars:
         ridx = rebalance_dates.searchsorted(bar, side="right") - 1
         universe = universe_by_period[ridx][1] if ridx >= 0 else []
+        # universe is ascending-momentum order (weakest last); rank 1 = weakest = the
+        # strongest short candidate, mirroring how rank 1 means "strongest" for the
+        # long strategies -- lets the trade log show exactly why a stock was picked.
+        rank_of = {sym: len(universe) - i for i, sym in enumerate(universe)}
 
         # --- execute signals queued from the PREVIOUS bar, at THIS bar's open ---
         for sym in list(pending_exits.keys()):
@@ -596,6 +611,7 @@ def run_short_ema_crossover_backtest(
             pnl_rs = qty * (pos["entry_price"] - open_px)
             trades.append({
                 "symbol": sym, "entry_date": pos["entry_date"], "entry_price": pos["entry_price"],
+                "entry_rank": pos["entry_rank"],
                 "stop_price": pos["stop_price"], "exit_date": bar, "exit_price": open_px,
                 "exit_reason": reason, "qty": qty, "risked_rs": pos["risked_rs"],
                 "pnl_rs": pnl_rs, "pnl_pct": 1 - open_px / pos["entry_price"],
@@ -604,7 +620,7 @@ def run_short_ema_crossover_backtest(
             })
 
         for sym in list(pending_entries.keys()):
-            initial_stop = pending_entries.pop(sym)
+            initial_stop, entry_rank = pending_entries.pop(sym)
             if sym in positions or len(positions) >= max_entries:
                 continue
             if sym not in bar_open.columns or bar not in bar_open.index:
@@ -618,6 +634,7 @@ def run_short_ema_crossover_backtest(
             positions[sym] = {
                 "entry_date": bar, "entry_price": open_px, "qty": qty,
                 "stop_price": initial_stop, "risked_rs": qty * risk_per_share,
+                "entry_rank": entry_rank,
             }
 
         # --- evaluate THIS bar's close for new signals, queued for next bar ---
@@ -647,7 +664,7 @@ def run_short_ema_crossover_backtest(
                 if pd.isna(ef) or pd.isna(es):
                     continue
                 if ef < es:
-                    pending_entries[sym] = es
+                    pending_entries[sym] = (es, rank_of[sym])
 
         # --- mark to market: cash minus the current cost to cover every open short ---
         mtm = cash
@@ -665,6 +682,7 @@ def run_short_ema_crossover_backtest(
         pnl_rs = qty * (pos["entry_price"] - px)
         trades.append({
             "symbol": sym, "entry_date": pos["entry_date"], "entry_price": pos["entry_price"],
+            "entry_rank": pos["entry_rank"],
             "stop_price": pos["stop_price"], "exit_date": pd.NaT, "exit_price": px,
             "exit_reason": "open", "qty": qty, "risked_rs": pos["risked_rs"],
             "pnl_rs": pnl_rs, "pnl_pct": 1 - px / pos["entry_price"],
