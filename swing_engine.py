@@ -499,6 +499,8 @@ def run_short_ema_crossover_backtest(
     ema_slow: int = 50,
     max_entries: int = 10,
     capital_base: float = 2_000_000.0,
+    use_target: bool = False,
+    risk_reward_ratio: float = 2.0,
 ) -> dict:
     """Short Momentum (F&O): the mirror image of run_ema_crossover_backtest,
     short-selling the WEAKEST momentum stocks within the F&O-eligible
@@ -534,8 +536,22 @@ def run_short_ema_crossover_backtest(
     is above ema_slow (the spec's "initial" stop -- price recovering past
     the slow EMA invalidates the downtrend thesis) OR ema_fast has closed
     above ema_slow (the spec's "trailing" stop), both checked every bar for
-    the life of the position. No fixed profit target. Executed at the next
-    bar's open.
+    the life of the position. Executed at the next bar's open.
+
+    Optional profit target (use_target): if enabled, target_price = entry
+    - risk_reward_ratio * (initial_stop - entry), i.e. an R-multiple of the
+    ORIGINAL risk below entry, fixed for the life of the trade (doesn't
+    move if the trailing stop later tightens the effective risk) -- same
+    convention as run_swing_backtest's long-side target. Checked against
+    each bar's CLOSE, same as the stop conditions -- there's no intrabar
+    high/low for hourly/2h bars here (see load_hourly_ohlc), so, like the
+    stop conditions, this can't detect a target touched and reversed
+    within a single bar. Checked before the stop conditions each bar, but
+    in practice they can't coincide: the target sits below entry, the stop
+    conditions require price back above ema_slow (above entry), so at most
+    one can be true on a given close. Off by default -- reproduces the
+    original pure trend-following behavior (ride until a stop condition
+    fires, no fixed exit).
 
     Position sizing: EQUAL notional per slot (capital_base / max_entries),
     not risk-based -- the spec here gives a capital figure and a slot count
@@ -558,10 +574,13 @@ def run_short_ema_crossover_backtest(
         allowed_symbols=fno_symbols, weakest=True,
     )
 
+    empty_cols = ["symbol", "entry_date", "entry_price", "entry_rank", "stop_price"]
+    if use_target:
+        empty_cols.append("target_price")
+    empty_cols += ["exit_date", "exit_price", "exit_reason", "qty", "risked_rs",
+                   "pnl_rs", "pnl_pct", "r_multiple", "hold_days", "status"]
     empty = {
-        "trades": pd.DataFrame(columns=["symbol", "entry_date", "entry_price", "entry_rank", "stop_price",
-                                         "exit_date", "exit_price", "exit_reason", "qty", "risked_rs",
-                                         "pnl_rs", "pnl_pct", "r_multiple", "hold_days", "status"]),
+        "trades": pd.DataFrame(columns=empty_cols),
         "equity": pd.Series(dtype=float),
         "n_universe_periods": 0,
         "capital_base": capital_base,
@@ -609,15 +628,20 @@ def run_short_ema_crossover_backtest(
             qty = pos["qty"]
             cash -= qty * open_px  # buy to cover
             pnl_rs = qty * (pos["entry_price"] - open_px)
-            trades.append({
+            trade_row = {
                 "symbol": sym, "entry_date": pos["entry_date"], "entry_price": pos["entry_price"],
-                "entry_rank": pos["entry_rank"],
-                "stop_price": pos["stop_price"], "exit_date": bar, "exit_price": open_px,
+                "entry_rank": pos["entry_rank"], "stop_price": pos["stop_price"],
+            }
+            if use_target:
+                trade_row["target_price"] = pos["target_price"]
+            trade_row.update({
+                "exit_date": bar, "exit_price": open_px,
                 "exit_reason": reason, "qty": qty, "risked_rs": pos["risked_rs"],
                 "pnl_rs": pnl_rs, "pnl_pct": 1 - open_px / pos["entry_price"],
                 "r_multiple": pnl_rs / pos["risked_rs"] if pos["risked_rs"] > 0 else np.nan,
                 "hold_days": (bar - pos["entry_date"]).days, "status": "closed",
             })
+            trades.append(trade_row)
 
         for sym in list(pending_entries.keys()):
             initial_stop, entry_rank = pending_entries.pop(sym)
@@ -636,6 +660,8 @@ def run_short_ema_crossover_backtest(
                 "stop_price": initial_stop, "risked_rs": qty * risk_per_share,
                 "entry_rank": entry_rank,
             }
+            if use_target:
+                positions[sym]["target_price"] = open_px - risk_reward_ratio * risk_per_share
 
         # --- evaluate THIS bar's close for new signals, queued for next bar ---
         for sym in list(positions.keys()):
@@ -646,7 +672,9 @@ def run_short_ema_crossover_backtest(
             es = ema_slow_series.at[bar, sym] if sym in ema_slow_series.columns else np.nan
             if pd.isna(c) or pd.isna(ef) or pd.isna(es):
                 continue
-            if c > es:
+            if use_target and c <= positions[sym]["target_price"]:
+                pending_exits[sym] = "target_hit"
+            elif c > es:
                 pending_exits[sym] = "close_above_ema_slow"
             elif ef > es:
                 pending_exits[sym] = "ema_fast_above_ema_slow"
@@ -680,15 +708,20 @@ def run_short_ema_crossover_backtest(
             continue
         qty = pos["qty"]
         pnl_rs = qty * (pos["entry_price"] - px)
-        trades.append({
+        trade_row = {
             "symbol": sym, "entry_date": pos["entry_date"], "entry_price": pos["entry_price"],
-            "entry_rank": pos["entry_rank"],
-            "stop_price": pos["stop_price"], "exit_date": pd.NaT, "exit_price": px,
+            "entry_rank": pos["entry_rank"], "stop_price": pos["stop_price"],
+        }
+        if use_target:
+            trade_row["target_price"] = pos["target_price"]
+        trade_row.update({
+            "exit_date": pd.NaT, "exit_price": px,
             "exit_reason": "open", "qty": qty, "risked_rs": pos["risked_rs"],
             "pnl_rs": pnl_rs, "pnl_pct": 1 - px / pos["entry_price"],
             "r_multiple": pnl_rs / pos["risked_rs"] if pos["risked_rs"] > 0 else np.nan,
             "hold_days": (bars[-1] - pos["entry_date"]).days, "status": "open",
         })
+        trades.append(trade_row)
 
     trades_df = pd.DataFrame(trades)
     if not trades_df.empty:

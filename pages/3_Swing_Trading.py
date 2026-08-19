@@ -90,6 +90,8 @@ with st.sidebar:
     stop_pct = 8.0
     risk_reward_ratio = 2.0
 
+    use_target = False
+
     if is_short:
         st.header("Short Momentum (F&O)")
         timeframe = st.radio("Timeframe", ["Hourly (~2-3 years)", "2-Hourly (~2-3 years)"], index=0)
@@ -104,9 +106,21 @@ with st.sidebar:
         st.caption(
             "Entry (short): fast EMA below slow EMA at a bar's close, filled at the next bar's "
             "open. Exit (cover): EITHER close above slow EMA OR fast EMA above slow EMA, also "
-            "filled at the next bar's open -- checked every bar for the life of the trade. No "
-            "fixed profit target."
+            "filled at the next bar's open -- checked every bar for the life of the trade."
         )
+        use_target = st.checkbox("Enable profit target", value=False)
+        if use_target:
+            risk_reward_ratio = st.number_input(
+                "Target: multiple of initial risk (target = entry - this x risk)",
+                min_value=0.5, max_value=20.0, value=2.0, step=0.5,
+                help="Risk = initial stop (ema_slow at signal) minus entry price. E.g. 2.0 = "
+                     "target is twice that distance BELOW entry. Checked against each bar's "
+                     "close (no intrabar high/low for hourly/2h bars), fixed for the life of "
+                     "the trade even if the trailing stop later tightens."
+            )
+            st.caption("With the target on, cover fires on target OR either stop condition -- whichever comes first.")
+        else:
+            st.caption("No fixed profit target (default) -- pure trend-following exit via the stop conditions above.")
     elif is_ema:
         st.header("EMA crossover")
         timeframe = st.radio(
@@ -205,6 +219,7 @@ if is_short:
                 monthly_prices, membership, bar_open, bar_close, fno_symbols,
                 lookback_months, skip_months, n_stocks, min_price,
                 ema_fast, ema_slow, max_entries, capital_base,
+                use_target, risk_reward_ratio,
             )
     else:
         with st.spinner("Running Short Momentum backtest (hourly bars, ~2-3 year window)..."):
@@ -213,6 +228,7 @@ if is_short:
                 monthly_prices, membership, bar_open, bar_close, fno_symbols,
                 lookback_months, skip_months, n_stocks, min_price,
                 ema_fast, ema_slow, max_entries, capital_base,
+                use_target, risk_reward_ratio,
             )
 elif is_ema:
     if timeframe.startswith("Hourly"):
@@ -297,7 +313,15 @@ else:
 cols2[3].metric("Open positions now", str((trades["status"] == "open").sum()))
 
 if pd.notna(avg_r) and avg_r < 0:
-    if has_target:
+    if has_target and is_short:
+        st.warning(
+            f"Negative expectancy ({avg_r:.2f}R per trade on average): this parameter combination "
+            f"loses money on average per trade, even before compounding. The target gets hit less "
+            f"often than the {breakeven_wr:.0%} win rate this risk:reward ratio needs to break "
+            f"even -- try a smaller target multiple, a wider stop (larger EMA spans), or disable "
+            f"the target and let the trailing-stop exit run."
+        )
+    elif has_target:
         st.warning(
             f"Negative expectancy ({avg_r:.2f}R per trade on average): this parameter combination "
             f"loses money on average per trade, even before compounding. A tight stop relative to "
