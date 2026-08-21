@@ -20,6 +20,7 @@ from backtest_engine import (
     load_membership_matrix,
     load_prices,
 )
+from ema_rs_rotation_engine import load_data as load_ema_rs_data
 
 
 @st.cache_data(show_spinner="Loading stock price history...")
@@ -75,3 +76,8 @@ def cached_load_2h_ohlc() -> tuple[pd.DataFrame, pd.DataFrame]:
 @st.cache_data(show_spinner="Loading F&O eligible stock list...")
 def cached_load_fno_symbols() -> set[str]:
     return load_fno_symbols()
+
+
+@st.cache_data(show_spinner="Loading spot index / ETF price history...")
+def cached_load_ema_rs_data(equity_leg: str, price_col: str) -> tuple[pd.Series, dict, str]:
+    return load_ema_rs_data(equity_leg, price_col)
