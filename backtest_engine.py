@@ -252,6 +252,31 @@ def load_liquid_series(price_col: str = "Adj Close") -> pd.Series:
     return s.resample("ME").last()
 
 
+# Instruments available to the Correction Lumpsum page (pages/5_Correction_Lumpsum.py).
+# Indices (not directly investable) are used for Nifty/midcap/smallcap since they have
+# the longest, cleanest history -- a "correction" is naturally a statement about the
+# index. Gold uses GOLDBEES (the ETF, not a USD gold index) for the same reason it's
+# used everywhere else in this project: it's the actual investable instrument.
+CORRECTION_INSTRUMENTS: dict[str, tuple[Path, str]] = {
+    "Nifty 50": (INDEX_DIR, "NIFTY50.csv"),
+    "Nifty 500": (INDEX_DIR, "NIFTY500.csv"),
+    "Nifty Midcap 150": (INDEX_DIR, "NIFTYMIDCAP150.csv"),
+    "Nifty Smallcap 250": (INDEX_DIR, "NIFTYSMLCAP250.csv"),
+    "Gold (GOLDBEES)": (ETF_DIR, "GOLDBEES.csv"),
+}
+
+
+def load_correction_instrument_daily(name: str, price_col: str = "Close") -> pd.Series:
+    """DAILY (not monthly) price series for one of CORRECTION_INSTRUMENTS,
+    for the Correction Lumpsum page -- detecting a % correction from a
+    rolling peak needs day-level resolution, unlike the monthly series
+    used by the momentum backtest and SIP pages."""
+    base_dir, fname = CORRECTION_INSTRUMENTS[name]
+    df = pd.read_csv(base_dir / fname, index_col=0, parse_dates=True)
+    col = price_col if price_col in df.columns else "Close"
+    return df[col].dropna().sort_index()
+
+
 def load_current_universe() -> pd.DataFrame:
     """The CURRENT Nifty 500 constituent list (Company Name, Symbol, ...),
     from data/nifty500_list.csv (see scripts/get_nifty500_list.py). Used by

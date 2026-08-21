@@ -229,6 +229,75 @@ def simulate_lumpsum_on_drawdown(
     }
 
 
+def run_multi_correction_lumpsum(
+    returns_by_name: dict[str, pd.Series],
+    lumpsum_amount: float,
+    drawdown_trigger_pct: float,
+    reset_recovery_pct: float = 0.0,
+) -> dict:
+    """Runs simulate_lumpsum_on_drawdown INDEPENDENTLY on each instrument in
+    returns_by_name (same lumpsum_amount, drawdown_trigger_pct,
+    reset_recovery_pct applied to every one -- each instrument's OWN price
+    history determines when IT corrects, not a shared trigger), then
+    combines them into one portfolio. This is the "multiple indexes/gold of
+    our choice" mode of the Correction Lumpsum page (pages/5); the single-
+    instrument mode just calls simulate_lumpsum_on_drawdown directly.
+
+    Combining: each instrument's value/invested series is reindexed onto
+    the UNION of all instruments' dates, forward-filled within its own
+    trading history (an instrument's value doesn't reset to 0 on a day it
+    simply didn't trade) and zero-filled before its first available date
+    (it hasn't started existing yet, not lost value), then summed.
+    total_invested and n_triggers are plain sums across instruments.
+    Combined XIRR is computed on the MERGED cashflow list (every
+    instrument's own lumpsum events, reconstructed from its triggers list
+    since each is exactly lumpsum_amount) plus one terminal inflow of the
+    combined final value -- a single money-weighted return across the
+    whole multi-instrument sleeve, not an average of each instrument's own
+    XIRR.
+    """
+    per_instrument: dict[str, dict] = {}
+    all_cashflows: list[tuple[pd.Timestamp, float]] = []
+    union_dates = pd.DatetimeIndex([])
+
+    for name, rets in returns_by_name.items():
+        res = simulate_lumpsum_on_drawdown(rets, lumpsum_amount, drawdown_trigger_pct, reset_recovery_pct)
+        per_instrument[name] = res
+        union_dates = union_dates.union(res["value"].index)
+        all_cashflows += [(d, -lumpsum_amount) for d, _ in res["triggers"]]
+
+    union_dates = union_dates.sort_values()
+    if len(union_dates) == 0:
+        return {
+            "value": pd.Series(dtype=float), "invested": pd.Series(dtype=float),
+            "total_invested": 0.0, "final_value": 0.0, "xirr": float("nan"),
+            "n_triggers": 0, "per_instrument": per_instrument,
+        }
+
+    combined_value = pd.Series(0.0, index=union_dates)
+    combined_invested = pd.Series(0.0, index=union_dates)
+    for res in per_instrument.values():
+        combined_value = combined_value.add(res["value"].reindex(union_dates).ffill().fillna(0.0), fill_value=0.0)
+        combined_invested = combined_invested.add(
+            res["invested"].reindex(union_dates).ffill().fillna(0.0), fill_value=0.0
+        )
+
+    total_invested = sum(res["total_invested"] for res in per_instrument.values())
+    final_value = combined_value.iloc[-1]
+    all_cashflows.sort(key=lambda cf: cf[0])
+    xirr_cashflows = all_cashflows + [(union_dates[-1], final_value)] if all_cashflows else []
+
+    return {
+        "value": combined_value,
+        "invested": combined_invested,
+        "total_invested": total_invested,
+        "final_value": final_value,
+        "xirr": compute_xirr(xirr_cashflows),
+        "n_triggers": sum(res["n_triggers"] for res in per_instrument.values()),
+        "per_instrument": per_instrument,
+    }
+
+
 def compute_xirr(cashflows: list[tuple[pd.Timestamp, float]], guess: float = 0.15) -> float:
     """Annualized IRR for a series of (date, amount) cashflows -- negative
     for outflows (contributions), positive for the final inflow (current

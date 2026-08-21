@@ -10,6 +10,7 @@ import streamlit as st
 from backtest_engine import (
     load_2h_ohlc,
     load_benchmark,
+    load_correction_instrument_daily,
     load_current_universe,
     load_daily_ohlc,
     load_daily_prices,
@@ -76,6 +77,11 @@ def cached_load_2h_ohlc() -> tuple[pd.DataFrame, pd.DataFrame]:
 @st.cache_data(show_spinner="Loading F&O eligible stock list...")
 def cached_load_fno_symbols() -> set[str]:
     return load_fno_symbols()
+
+
+@st.cache_data(show_spinner="Loading price history for correction-triggered lumpsum...")
+def cached_load_correction_instrument(name: str, price_col: str) -> pd.Series:
+    return load_correction_instrument_daily(name, price_col)
 
 
 @st.cache_data(show_spinner="Loading spot index / ETF price history...")
