@@ -1,7 +1,7 @@
 """
 Swing trading: scans a momentum-ranked universe (same ranking formula as
 the Backtest page) each month for entries, trades them individually
-instead of holding a rebalanced basket. Three strategy families:
+instead of holding a rebalanced basket. Four strategy families:
   - Breakout (gap-up / Donchian channel), long, top-N momentum, with an
     R-multiple profit target.
   - EMA 15/50 crossover, long, top-N momentum, daily or hourly bars, no
@@ -11,6 +11,12 @@ instead of holding a rebalanced basket. Three strategy families:
     F&O-eligible stocks only, hourly or 2-hourly bars, no fixed target --
     see run_short_ema_crossover_backtest's docstring for the shorting
     simplification this implies.
+  - ORB (Opening Range Breakout), long or short, hourly bars only. Long
+    universe is top-N Nifty 500 momentum; short universe is bottom-N
+    (weakest) F&O-eligible momentum, same reasoning as Short Momentum.
+    See run_orb_backtest's docstring for the exact mechanics (opening
+    range captured on each month's first trading day, held fixed for the
+    month, re-entries allowed, forced exit at month end).
 See swing_engine.py for the full mechanics and the design assumptions
 made where the source spec was ambiguous.
 """
@@ -23,12 +29,14 @@ from streamlit_cache import (
     cached_load_2h_ohlc,
     cached_load_daily_ohlc,
     cached_load_fno_symbols,
+    cached_load_hourly_full_ohlc,
     cached_load_hourly_ohlc,
     cached_load_membership,
     cached_load_prices,
 )
 from swing_engine import (
     run_ema_crossover_backtest,
+    run_orb_backtest,
     run_short_ema_crossover_backtest,
     run_swing_backtest,
 )
@@ -51,16 +59,27 @@ with st.sidebar:
     st.header("Strategy")
     strategy_label = st.radio(
         "Strategy type",
-        ["Breakout (gap-up / Donchian)", "EMA 15/50 crossover", "Short Momentum (F&O)"],
+        ["Breakout (gap-up / Donchian)", "EMA 15/50 crossover", "Short Momentum (F&O)",
+         "ORB (Opening Range Breakout)"],
         index=0,
     )
     is_ema = strategy_label == "EMA 15/50 crossover"
     is_short = strategy_label == "Short Momentum (F&O)"
+    is_orb = strategy_label == "ORB (Opening Range Breakout)"
+
+    orb_direction = "long"
+    if is_orb:
+        orb_direction_label = st.radio(
+            "ORB direction", ["Long (Nifty 500 momentum)", "Short (F&O weakest momentum)"], index=0
+        )
+        orb_direction = "long" if orb_direction_label.startswith("Long") else "short"
+    is_orb_short = is_orb and orb_direction == "short"
 
     st.header("Momentum universe")
     n_stocks = st.slider(
         "Number of stocks in universe", min_value=5, max_value=100, value=20, step=5,
-        help="For Short Momentum this is the WEAKEST N stocks by trailing return, not the strongest."
+        help="For Short Momentum / ORB-short this is the WEAKEST N stocks by trailing return, "
+             "not the strongest."
     )
     lookback_months = st.slider("Ranking lookback (months)", min_value=1, max_value=24, value=10, step=1)
     skip_months = st.slider(
@@ -70,7 +89,7 @@ with st.sidebar:
     price_col = st.selectbox("Price field for ranking", ["Adj Close", "Close"], index=0)
     min_price = st.number_input("Minimum price filter (Rs)", min_value=0.0, value=10.0, step=5.0)
     use_membership_filter = st.checkbox("Enforce point-in-time index membership", value=True)
-    if is_short:
+    if is_short or is_orb_short:
         st.caption(
             "Also restricted to currently F&O-eligible stocks (~208 names) -- shorting "
             "individual equities isn't viable in the Indian cash market, only via stock "
@@ -89,6 +108,8 @@ with st.sidebar:
     exit_lookback_days = 1
     stop_pct = 8.0
     risk_reward_ratio = 2.0
+    range_minutes = 60
+    position_pct = 5.0
 
     use_target = False
 
@@ -121,6 +142,42 @@ with st.sidebar:
             st.caption("With the target on, cover fires on target OR either stop condition -- whichever comes first.")
         else:
             st.caption("No fixed profit target (default) -- pure trend-following exit via the stop conditions above.")
+    elif is_orb:
+        st.header("Opening Range Breakout")
+        range_minutes = st.slider(
+            "Opening range (minutes)", min_value=60, max_value=180, value=60, step=60,
+            help="Must be a multiple of 60 -- only hourly bars are available, so anything finer "
+                 "than one hourly bar isn't computable here. 60 = the first hourly bar of the "
+                 "month's first trading day; 120 = the first two, etc."
+        )
+        st.caption(
+            "Yahoo Finance only serves hourly data for roughly the trailing 2-3 years, unlike "
+            "the daily data used elsewhere in this app which goes back to 2008."
+        )
+        if orb_direction == "long":
+            st.caption(
+                "Range = high/low of the opening window on the month's first trading day, held "
+                "fixed for the whole month. Entry: a bar closes above the range high, filled at "
+                "the next bar's open. Stop: a bar closes below the range LOW (the opposite edge "
+                "of the same range). Re-entry: allowed any time later in the same month if price "
+                "closes above the range high again, using the same stop. Exit: force-closed at "
+                "the close of the last bar of the month if the stop hasn't hit."
+            )
+        else:
+            st.caption(
+                "Range = high/low of the opening window on the month's first trading day, held "
+                "fixed for the whole month. Entry (short): a bar closes below the range low, "
+                "filled at the next bar's open. Stop: a bar closes above the range HIGH (the "
+                "opposite edge of the same range). Re-entry: allowed any time later in the same "
+                "month if price closes below the range low again, using the same stop. Exit: "
+                "force-closed at the close of the last bar of the month if the stop hasn't hit."
+            )
+        st.caption(
+            "Universe coverage: hourly data only exists for stocks that were ever in the top "
+            "momentum universe or the F&O list when it was downloaded (~329 symbols) -- if a "
+            "given month's top/bottom-N pick falls outside that set, it's silently skipped (no "
+            "range, no trades) rather than erroring."
+        )
     elif is_ema:
         st.header("EMA crossover")
         timeframe = st.radio(
@@ -183,6 +240,15 @@ with st.sidebar:
                  "the other two strategies, since the spec here is capital + a slot count."
         )
         risk_pct, max_position_pct = 1.0, 20.0  # unused by the short engine; kept defined for downstream code
+    elif is_orb:
+        capital_base = st.number_input("Starting capital (Rs)", min_value=100_000.0, value=1_000_000.0, step=100_000.0)
+        position_pct = st.slider(
+            "Position size (% of capital per stock)", min_value=1.0, max_value=100.0, value=5.0, step=0.5,
+            help="A FIXED % of starting capital allocated to every entry (not risk-based). Every "
+                 "re-entry within a month sizes off this same starting capital, not fluctuating "
+                 "equity, and is capped by available cash."
+        )
+        risk_pct, max_position_pct, risk_reward_ratio, max_entries = 1.0, 20.0, 2.0, 10  # unused, kept defined
     else:
         capital_base = st.number_input("Starting capital (Rs)", min_value=100_000.0, value=1_000_000.0, step=100_000.0)
         risk_pct = st.slider(
@@ -208,7 +274,18 @@ membership = None
 if use_membership_filter:
     membership = cached_load_membership(tuple(monthly_prices.index.values), tuple(monthly_prices.columns))
 
-if is_short:
+if is_orb:
+    fno_symbols = cached_load_fno_symbols() if orb_direction == "short" else None
+    with st.spinner("Fetching hourly price data (first run only)..."):
+        ensure_hourly_data()
+    with st.spinner(f"Running ORB {orb_direction} backtest (hourly bars, ~2-3 year window)..."):
+        bar_open, bar_high, bar_low, bar_close = cached_load_hourly_full_ohlc()
+        result = run_orb_backtest(
+            monthly_prices, membership, bar_open, bar_high, bar_low, bar_close, fno_symbols,
+            lookback_months, skip_months, n_stocks, min_price,
+            orb_direction, range_minutes, position_pct, capital_base,
+        )
+elif is_short:
     fno_symbols = cached_load_fno_symbols()
     with st.spinner("Fetching hourly price data (first run only)..."):
         ensure_hourly_data()
@@ -266,8 +343,8 @@ equity = result["equity"]
 if trades.empty or equity.empty:
     st.warning(
         "No trades were generated with these parameters -- try a lower gap threshold, a "
-        "shorter Donchian lookback, a larger universe, or (for the EMA/Short Momentum "
-        "strategies) a shorter fast/slow EMA span."
+        "shorter Donchian lookback, a larger universe, (for the EMA/Short Momentum strategies) "
+        "a shorter fast/slow EMA span, or (for ORB) a shorter opening range."
     )
     st.stop()
 
@@ -377,7 +454,16 @@ st.dataframe(
 has_entry_rank = "entry_rank" in trades.columns
 
 with st.expander("Trade log"):
-    if has_entry_rank:
+    if has_entry_rank and is_orb:
+        rank1_meaning = "weakest" if is_orb_short else "strongest"
+        st.caption(
+            f"entry_rank = the stock's position (1 = {rank1_meaning}) in that month's universe "
+            "as of the monthly rebalance in effect when the entry fired -- ranking only updates "
+            "monthly, so a re-entry later in the same month still uses the rank from the month's "
+            "start. ORB positions never carry across a month boundary, so this always reflects "
+            "the rank that was actually active for that specific trade."
+        )
+    elif has_entry_rank:
         st.caption(
             "entry_rank = the stock's position (1 = weakest) in the weakest-N F&O universe as "
             "of the monthly rebalance in effect when the entry SIGNAL fired -- not its rank "
@@ -412,7 +498,21 @@ with st.expander("Trade log"):
     )
 
 st.divider()
-if is_short:
+if is_orb:
+    st.caption(
+        f"Universe recomputed at {result['n_universe_periods']} monthly rebalance points using the "
+        "same ranking formula as the Backtest page (compute_momentum_ranking)"
+        + (", restricted to F&O-eligible stocks and taking the WEAKEST names instead of the "
+           "strongest" if is_orb_short else "")
+        + ". Position sizing is a FIXED % of starting capital per trade (see sidebar), not "
+          "risk-based, capped by available cash. No position ever carries across a month "
+          "boundary -- every trade opens and closes within the same calendar month."
+        + (" Modeled as directly shorting the stock at its spot price -- economically close to "
+           "a fully-margined stock future, but ignoring real futures mechanics (lot sizes, "
+           "margin, rollover, futures-spot basis)." if is_orb_short else "")
+        + " Costs, taxes, and slippage are not modeled here yet."
+    )
+elif is_short:
     st.caption(
         f"Universe recomputed at {result['n_universe_periods']} monthly rebalance points using the "
         "same ranking formula as the Backtest page (compute_momentum_ranking), restricted to "

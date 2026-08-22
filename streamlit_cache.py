@@ -16,6 +16,7 @@ from backtest_engine import (
     load_daily_prices,
     load_fno_symbols,
     load_gold_series,
+    load_hourly_full_ohlc,
     load_hourly_ohlc,
     load_liquid_series,
     load_membership_matrix,
@@ -67,6 +68,11 @@ def cached_load_daily_ohlc() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, 
 @st.cache_data(show_spinner="Loading hourly price history for the EMA swing strategy...")
 def cached_load_hourly_ohlc() -> tuple[pd.DataFrame, pd.DataFrame]:
     return load_hourly_ohlc()
+
+
+@st.cache_data(show_spinner="Loading hourly OHLC history for the ORB strategy...")
+def cached_load_hourly_full_ohlc() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    return load_hourly_full_ohlc()
 
 
 @st.cache_data(show_spinner="Building 2-hour bars from hourly price history...")

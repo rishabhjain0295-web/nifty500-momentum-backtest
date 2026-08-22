@@ -373,6 +373,13 @@ def run_ema_crossover_backtest(
     ema_fast_series = bar_close.ewm(span=ema_fast, adjust=False).mean()
     ema_slow_series = bar_close.ewm(span=ema_slow, adjust=False).mean()
 
+    # Bar -> period-index mapping, normalized to each bar's own month-start
+    # before the searchsorted lookup -- see run_orb_backtest's comment on
+    # this same line for why a raw timestamp comparison is wrong (it puts
+    # the last trading day of each month into the NEXT month's universe).
+    bar_month_starts = pd.DatetimeIndex([b.replace(day=1, hour=0, minute=0, second=0) for b in bars])
+    ridx_of_bar = dict(zip(bars, rebalance_dates.searchsorted(bar_month_starts, side="right") - 1))
+
     cash = capital_base
     positions: dict[str, dict] = {}
     trades: list[dict] = []
@@ -381,7 +388,7 @@ def run_ema_crossover_backtest(
     pending_exits: dict[str, str] = {}  # symbol -> exit_reason decided at the signal bar
 
     for bar in bars:
-        ridx = rebalance_dates.searchsorted(bar, side="right") - 1
+        ridx = ridx_of_bar[bar]
         universe = universe_by_period[ridx][1] if ridx >= 0 else []
 
         # --- execute signals queued from the PREVIOUS bar, at THIS bar's open ---
@@ -601,6 +608,13 @@ def run_short_ema_crossover_backtest(
     ema_slow_series = bar_close.ewm(span=ema_slow, adjust=False).mean()
     notional_per_slot = capital_base / max_entries
 
+    # Bar -> period-index mapping, normalized to each bar's own month-start
+    # before the searchsorted lookup -- see run_orb_backtest's comment on
+    # this same line for why a raw timestamp comparison is wrong (it puts
+    # the last trading day of each month into the NEXT month's universe).
+    bar_month_starts = pd.DatetimeIndex([b.replace(day=1, hour=0, minute=0, second=0) for b in bars])
+    ridx_of_bar = dict(zip(bars, rebalance_dates.searchsorted(bar_month_starts, side="right") - 1))
+
     cash = capital_base
     positions: dict[str, dict] = {}
     trades: list[dict] = []
@@ -609,7 +623,7 @@ def run_short_ema_crossover_backtest(
     pending_exits: dict[str, str] = {}  # symbol -> exit_reason
 
     for bar in bars:
-        ridx = rebalance_dates.searchsorted(bar, side="right") - 1
+        ridx = ridx_of_bar[bar]
         universe = universe_by_period[ridx][1] if ridx >= 0 else []
         # universe is ascending-momentum order (weakest last); rank 1 = weakest = the
         # strongest short candidate, mirroring how rank 1 means "strongest" for the
@@ -722,6 +736,301 @@ def run_short_ema_crossover_backtest(
             "hold_days": (bars[-1] - pos["entry_date"]).days, "status": "open",
         })
         trades.append(trade_row)
+
+    trades_df = pd.DataFrame(trades)
+    if not trades_df.empty:
+        trades_df = trades_df.sort_values("entry_date").reset_index(drop=True)
+
+    return {
+        "trades": trades_df,
+        "equity": equity_series,
+        "n_universe_periods": len(universe_by_period),
+        "capital_base": capital_base,
+    }
+
+
+def _compute_orb_ranges(
+    bar_high: pd.DataFrame,
+    bar_low: pd.DataFrame,
+    rebalance_dates: pd.DatetimeIndex,
+    universe_by_period: list[tuple[pd.Timestamp, list[str]]],
+    period_bars: list[pd.DatetimeIndex],
+    range_bars: int,
+) -> list[dict[str, tuple[float, float]]]:
+    """For each monthly period, {symbol: (range_high, range_low)} from the
+    high/low of the first range_bars hourly bars of that period's FIRST
+    TRADING DAY, for every symbol in that period's universe. Returns a list
+    aligned by period index (parallel to universe_by_period/period_bars)."""
+    ranges_by_period: list[dict[str, tuple[float, float]]] = []
+    for pidx, (_, universe) in enumerate(universe_by_period):
+        bars = period_bars[pidx]
+        ranges: dict[str, tuple[float, float]] = {}
+        if len(bars) > 0:
+            first_day = bars[0].normalize()
+            range_window = bars[bars.normalize() == first_day][:range_bars]
+            for sym in universe:
+                if sym not in bar_high.columns or sym not in bar_low.columns:
+                    continue
+                highs = bar_high.loc[bar_high.index.isin(range_window), sym].dropna()
+                lows = bar_low.loc[bar_low.index.isin(range_window), sym].dropna()
+                if highs.empty or lows.empty:
+                    continue
+                ranges[sym] = (highs.max(), lows.min())
+        ranges_by_period.append(ranges)
+    return ranges_by_period
+
+
+def run_orb_backtest(
+    monthly_prices: pd.DataFrame,
+    membership: pd.DataFrame | None,
+    bar_open: pd.DataFrame,
+    bar_high: pd.DataFrame,
+    bar_low: pd.DataFrame,
+    bar_close: pd.DataFrame,
+    fno_symbols: set[str] | None,
+    lookback_months: int,
+    skip_months: int,
+    n_stocks: int,
+    min_price: float,
+    direction: str,
+    range_minutes: int = 60,
+    position_pct: float = 5.0,
+    capital_base: float = 1_000_000.0,
+) -> dict:
+    """Opening Range Breakout (ORB), long or short (direction="long" or
+    "short"), on hourly bars. Universe: for direction="long", the TOP
+    n_stocks by momentum among all eligible Nifty 500 stocks (fno_symbols
+    ignored); for direction="short", the BOTTOM n_stocks (weakest) among
+    fno_symbols only (real shorting needs stock futures -- same reasoning
+    as run_short_ema_crossover_backtest). Reuses _build_universe_calendar
+    so this can't drift out of sync with the other strategies' ranking.
+
+    Opening range: the high/low of the first range_minutes of the 1-hour
+    chart on the FIRST TRADING DAY of each month, held fixed as that
+    month's breakout/stop levels for every remaining bar of the month
+    (recomputed fresh each month, not a rolling channel). range_minutes
+    must be a multiple of 60 -- only hourly bars are available (see
+    load_hourly_full_ohlc), so anything finer isn't computable here;
+    range_bars = max(1, round(range_minutes / 60)) hourly bars are used.
+
+    Entry (long): first bar CLOSE above the range high, for a universe
+    stock not currently in a position. Entry (short): first bar CLOSE
+    below the range low. Executed at the NEXT bar's open (same lookahead-
+    avoidance lag as every other hourly strategy in this module -- the
+    close that triggers the signal isn't known until the bar closes).
+
+    Stop: long stops on a CLOSE below the range LOW (the opposite edge of
+    the same range, not a computed distance); short stops on a CLOSE
+    above the range HIGH. Also executed at the next bar's open. A stock
+    stopped out mid-month is free to re-trigger the SAME entry condition
+    again later in the SAME month, using the SAME range/stop levels --
+    there's no limit on re-entries per month, only on available cash and
+    the entry condition recurring.
+
+    Exit (time-based): any position still open is force-closed on the
+    LAST bar of the last trading day of the month, AT THAT BAR'S OWN
+    CLOSE (not deferred to a next-bar open -- this is a scheduled square-
+    off, not a reactive signal, and there may be no "next bar" left in
+    the month to defer to). That bar is excluded from new-entry signal
+    evaluation, since entering and immediately force-exiting on the same
+    bar would be a pointless zero-duration trade. No position ever
+    carries across a month boundary.
+
+    Position sizing: a FIXED position_pct of capital_base per trade
+    (e.g. 5%), not risk-based -- matches the spec (a flat % of capital,
+    not a per-trade risk %). Capped by available cash. Every re-entry in
+    a month sizes off the same capital_base, not fluctuating equity.
+
+    Simplification (short direction only): modeled as directly shorting
+    the stock at its spot price, same convention and same caveats as
+    run_short_ema_crossover_backtest (economically close to a fully-
+    margined stock future, ignoring real futures mechanics).
+    """
+    is_long = direction == "long"
+    range_bars = max(1, round(range_minutes / 60))
+
+    universe_by_period = _build_universe_calendar(
+        monthly_prices, membership, lookback_months, skip_months, n_stocks, min_price,
+        allowed_symbols=(None if is_long else fno_symbols), weakest=(not is_long),
+    )
+
+    empty = {
+        "trades": pd.DataFrame(columns=["symbol", "entry_date", "entry_price", "entry_rank", "stop_price",
+                                         "exit_date", "exit_price", "exit_reason", "qty", "risked_rs",
+                                         "pnl_rs", "pnl_pct", "r_multiple", "hold_days", "status"]),
+        "equity": pd.Series(dtype=float),
+        "n_universe_periods": 0,
+        "capital_base": capital_base,
+    }
+    if not universe_by_period:
+        return empty
+
+    rebalance_dates = pd.DatetimeIndex([u[0] for u in universe_by_period])
+    start_date = rebalance_dates[0]
+    last_bar_date = bar_close.index.max()
+    if last_bar_date <= start_date:
+        return empty
+    bars = bar_close.index[(bar_close.index > start_date) & (bar_close.index <= last_bar_date)]
+    if len(bars) == 0:
+        return empty
+
+    # Bar -> period-index mapping, the SINGLE source of truth for every other
+    # per-period lookup below (period_bars, ranges, universe/rank in the loop).
+    # rebalance_dates are calendar month-end dates at MIDNIGHT, but bars carry
+    # an intraday time -- comparing raw timestamps would put the last trading
+    # day's own bars (e.g. Oct 31, 09:15-15:15) one period too late, since
+    # "Oct 31 09:15" > "Oct 31 00:00". Normalizing each bar to the 1st of ITS
+    # OWN calendar month before the searchsorted lookup fixes this: every bar
+    # anywhere in October maps to the same period regardless of day or time.
+    bar_month_starts = pd.DatetimeIndex([b.replace(day=1, hour=0, minute=0, second=0) for b in bars])
+    bar_ridx = rebalance_dates.searchsorted(bar_month_starts, side="right") - 1
+    ridx_of_bar = dict(zip(bars, bar_ridx))
+
+    period_bars: list[pd.DatetimeIndex] = [bars[bar_ridx == pidx] for pidx in range(len(rebalance_dates))]
+    last_bar_of_period = {pb[-1] for pb in period_bars if len(pb) > 0}
+
+    ranges_by_period = _compute_orb_ranges(bar_high, bar_low, rebalance_dates, universe_by_period, period_bars, range_bars)
+
+    notional_per_trade = capital_base * position_pct / 100.0
+
+    cash = capital_base
+    positions: dict[str, dict] = {}
+    trades: list[dict] = []
+    equity_series = pd.Series(index=bars, dtype=float)
+    pending_entries: dict[str, tuple[float, int]] = {}  # symbol -> (stop_price, rank)
+    pending_exits: dict[str, str] = {}  # symbol -> exit_reason
+
+    for bar in bars:
+        ridx = ridx_of_bar[bar]
+        universe = universe_by_period[ridx][1] if ridx >= 0 else []
+        ranges = ranges_by_period[ridx] if ridx >= 0 else {}
+        is_month_end_bar = bar in last_bar_of_period
+        rank_of = {sym: (i + 1 if is_long else len(universe) - i) for i, sym in enumerate(universe)}
+
+        # --- execute signals queued from the PREVIOUS bar, at THIS bar's open ---
+        for sym in list(pending_exits.keys()):
+            reason = pending_exits.pop(sym)
+            if sym not in positions or sym not in bar_open.columns or bar not in bar_open.index:
+                continue
+            open_px = bar_open.at[bar, sym]
+            if pd.isna(open_px) or open_px <= 0:
+                continue
+            pos = positions.pop(sym)
+            qty = pos["qty"]
+            pnl_rs = qty * (open_px - pos["entry_price"]) if is_long else qty * (pos["entry_price"] - open_px)
+            cash += qty * open_px if is_long else -qty * open_px
+            trades.append({
+                "symbol": sym, "entry_date": pos["entry_date"], "entry_price": pos["entry_price"],
+                "entry_rank": pos["entry_rank"], "stop_price": pos["stop_price"],
+                "exit_date": bar, "exit_price": open_px, "exit_reason": reason, "qty": qty,
+                "risked_rs": pos["risked_rs"], "pnl_rs": pnl_rs,
+                "pnl_pct": (open_px / pos["entry_price"] - 1) if is_long else (1 - open_px / pos["entry_price"]),
+                "r_multiple": pnl_rs / pos["risked_rs"] if pos["risked_rs"] > 0 else np.nan,
+                "hold_days": (bar - pos["entry_date"]).days, "status": "closed",
+            })
+
+        for sym in list(pending_entries.keys()):
+            stop_price, entry_rank = pending_entries.pop(sym)
+            if sym in positions:
+                continue
+            if sym not in bar_open.columns or bar not in bar_open.index:
+                continue
+            open_px = bar_open.at[bar, sym]
+            if pd.isna(open_px) or open_px <= 0:
+                continue
+            if is_long and stop_price >= open_px:
+                continue
+            if not is_long and stop_price <= open_px:
+                continue
+            qty = min(notional_per_trade / open_px, cash / open_px)
+            if qty <= 0:
+                continue
+            risk_per_share = abs(open_px - stop_price)
+            cash -= qty * open_px if is_long else -qty * open_px
+            positions[sym] = {
+                "entry_date": bar, "entry_price": open_px, "qty": qty,
+                "stop_price": stop_price, "risked_rs": qty * risk_per_share,
+                "entry_rank": entry_rank,
+            }
+
+        # --- FORCE-CLOSE any open position at THIS bar's own close, if this is the
+        # last bar of the month (scheduled square-off, not a next-bar-deferred signal) ---
+        if is_month_end_bar:
+            for sym in list(positions.keys()):
+                if sym not in bar_close.columns or bar not in bar_close.index:
+                    continue
+                px = bar_close.at[bar, sym]
+                if pd.isna(px) or px <= 0:
+                    continue
+                pos = positions.pop(sym)
+                qty = pos["qty"]
+                pnl_rs = qty * (px - pos["entry_price"]) if is_long else qty * (pos["entry_price"] - px)
+                cash += qty * px if is_long else -qty * px
+                trades.append({
+                    "symbol": sym, "entry_date": pos["entry_date"], "entry_price": pos["entry_price"],
+                    "entry_rank": pos["entry_rank"], "stop_price": pos["stop_price"],
+                    "exit_date": bar, "exit_price": px, "exit_reason": "month_end", "qty": qty,
+                    "risked_rs": pos["risked_rs"], "pnl_rs": pnl_rs,
+                    "pnl_pct": (px / pos["entry_price"] - 1) if is_long else (1 - px / pos["entry_price"]),
+                    "r_multiple": pnl_rs / pos["risked_rs"] if pos["risked_rs"] > 0 else np.nan,
+                    "hold_days": (bar - pos["entry_date"]).days, "status": "closed",
+                })
+                pending_exits.pop(sym, None)
+                pending_entries.pop(sym, None)
+        else:
+            # --- evaluate THIS bar's close for new signals, queued for next bar ---
+            for sym in list(positions.keys()):
+                if sym in pending_exits or sym not in bar_close.columns or bar not in bar_close.index:
+                    continue
+                if sym not in ranges:
+                    continue
+                c = bar_close.at[bar, sym]
+                if pd.isna(c):
+                    continue
+                range_high, range_low = ranges[sym]
+                if is_long and c < range_low:
+                    pending_exits[sym] = "stoploss"
+                elif not is_long and c > range_high:
+                    pending_exits[sym] = "stoploss"
+
+            for sym in universe:
+                if sym in positions or sym in pending_entries:
+                    continue
+                if sym not in bar_close.columns or bar not in bar_close.index or sym not in ranges:
+                    continue
+                c = bar_close.at[bar, sym]
+                if pd.isna(c):
+                    continue
+                range_high, range_low = ranges[sym]
+                if is_long and c > range_high:
+                    pending_entries[sym] = (range_low, rank_of[sym])
+                elif not is_long and c < range_low:
+                    pending_entries[sym] = (range_high, rank_of[sym])
+
+        # --- mark to market ---
+        mtm = cash
+        for sym, pos in positions.items():
+            px = bar_close.at[bar, sym] if sym in bar_close.columns and bar in bar_close.index else np.nan
+            px = px if pd.notna(px) else pos["entry_price"]
+            mtm += pos["qty"] * px if is_long else -pos["qty"] * px
+        equity_series.at[bar] = mtm
+
+    # still-open positions at the very end of available data -> unrealized
+    for sym, pos in positions.items():
+        px = bar_close.at[bars[-1], sym] if sym in bar_close.columns else np.nan
+        if pd.isna(px):
+            continue
+        qty = pos["qty"]
+        pnl_rs = qty * (px - pos["entry_price"]) if is_long else qty * (pos["entry_price"] - px)
+        trades.append({
+            "symbol": sym, "entry_date": pos["entry_date"], "entry_price": pos["entry_price"],
+            "entry_rank": pos["entry_rank"], "stop_price": pos["stop_price"],
+            "exit_date": pd.NaT, "exit_price": px, "exit_reason": "open", "qty": qty,
+            "risked_rs": pos["risked_rs"], "pnl_rs": pnl_rs,
+            "pnl_pct": (px / pos["entry_price"] - 1) if is_long else (1 - px / pos["entry_price"]),
+            "r_multiple": pnl_rs / pos["risked_rs"] if pos["risked_rs"] > 0 else np.nan,
+            "hold_days": (bars[-1] - pos["entry_date"]).days, "status": "open",
+        })
 
     trades_df = pd.DataFrame(trades)
     if not trades_df.empty:

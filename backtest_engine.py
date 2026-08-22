@@ -198,6 +198,39 @@ def load_hourly_ohlc() -> tuple[pd.DataFrame, pd.DataFrame]:
     return hourly_open, hourly_close
 
 
+def load_hourly_full_ohlc() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Like load_hourly_ohlc, but also loads High/Low -- needed by the ORB
+    (Opening Range Breakout) swing strategy to capture the actual high/low
+    of the opening range bar(s), not just their close. Same data/hourly/
+    source, same ~2-3 year window, same tz-naive conversion."""
+    open_frames, high_frames, low_frames, close_frames = {}, {}, {}, {}
+    for f in HOURLY_DIR.glob("*.csv"):
+        sym = f.stem
+        try:
+            df = pd.read_csv(f, index_col=0, parse_dates=True)
+        except Exception:
+            continue
+        if not {"Open", "High", "Low", "Close"}.issubset(df.columns) or df.empty:
+            continue
+        if df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
+        o, h, l, c = df["Open"].dropna(), df["High"].dropna(), df["Low"].dropna(), df["Close"].dropna()
+        if o.empty or h.empty or l.empty or c.empty:
+            continue
+        open_frames[sym] = o
+        high_frames[sym] = h
+        low_frames[sym] = l
+        close_frames[sym] = c
+    if not close_frames:
+        raise RuntimeError(f"No usable hourly data found in {HOURLY_DIR}")
+    return (
+        pd.DataFrame(open_frames).sort_index(),
+        pd.DataFrame(high_frames).sort_index(),
+        pd.DataFrame(low_frames).sort_index(),
+        pd.DataFrame(close_frames).sort_index(),
+    )
+
+
 def load_2h_ohlc() -> tuple[pd.DataFrame, pd.DataFrame]:
     """Resamples load_hourly_ohlc()'s bars into 2-hour bars, for the Short
     Momentum (F&O) swing strategy's "2 hourly" timeframe option. NSE's
