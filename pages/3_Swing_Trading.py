@@ -110,6 +110,7 @@ with st.sidebar:
     risk_reward_ratio = 2.0
     range_minutes = 60
     max_reentries = 4
+    orb_stop_mode = "range"
     position_pct = 5.0
 
     use_target = False
@@ -157,28 +158,44 @@ with st.sidebar:
                  "re-entries (5 entries total) at the same range levels if repeatedly stopped out. "
                  "Resets every month."
         )
+        orb_stop_label = st.radio(
+            "Stop mechanism", ["Opposite range edge (default)", "Fixed % stoploss"], index=0,
+            help="Opposite edge: the stop is fixed off the RANGE, so every re-entry in a month "
+                 "shares the same stop level. Fixed %: the stop is fixed off each entry's OWN "
+                 "fill price instead, so re-entries at a different price get a different stop."
+        )
+        orb_stop_mode = "range" if orb_stop_label.startswith("Opposite") else "fixed_pct"
+        if orb_stop_mode == "fixed_pct":
+            stop_pct = st.slider(
+                "Fixed stoploss (% from entry)", min_value=0.5, max_value=30.0, value=8.0, step=0.5,
+                help="Long: stop = entry price x (1 - this%). Short: stop = entry price x (1 + this%)."
+            )
         st.caption(
             "Yahoo Finance only serves hourly data for roughly the trailing 2-3 years, unlike "
             "the daily data used elsewhere in this app which goes back to 2008."
         )
+        stop_desc = (
+            f"a bar closes {'below' if orb_direction == 'long' else 'above'} the fixed stoploss "
+            f"({stop_pct}% from entry)" if orb_stop_mode == "fixed_pct" else
+            f"a bar closes {'below the range LOW' if orb_direction == 'long' else 'above the range HIGH'} "
+            "(the opposite edge of the same range)"
+        )
         if orb_direction == "long":
             st.caption(
                 "Range = high/low of the opening window on the month's first trading day, held "
-                "fixed for the whole month. Entry: a bar closes above the range high, filled at "
-                "the next bar's open. Stop: a bar closes below the range LOW (the opposite edge "
-                "of the same range). Re-entry: if stopped out, allowed again later in the same "
-                "month (up to the limit below) if price closes above the range high again, using "
-                "the same stop. Exit: force-closed at the close of the last bar of the month if "
-                "the stop hasn't hit."
+                f"fixed for the whole month. Entry: a bar closes above the range high, filled at "
+                f"the next bar's open. Stop: {stop_desc}. Re-entry: if stopped out, allowed again "
+                "later in the same month (up to the limit above) if price closes above the range "
+                "high again. Exit: force-closed at the close of the last bar of the month if the "
+                "stop hasn't hit."
             )
         else:
             st.caption(
                 "Range = high/low of the opening window on the month's first trading day, held "
-                "fixed for the whole month. Entry (short): a bar closes below the range low, "
-                "filled at the next bar's open. Stop: a bar closes above the range HIGH (the "
-                "opposite edge of the same range). Re-entry: if stopped out, allowed again later "
-                "in the same month (up to the limit below) if price closes below the range low "
-                "again, using the same stop. Exit: force-closed at the close of the last bar of "
+                f"fixed for the whole month. Entry (short): a bar closes below the range low, "
+                f"filled at the next bar's open. Stop: {stop_desc}. Re-entry: if stopped out, "
+                "allowed again later in the same month (up to the limit above) if price closes "
+                "below the range low again. Exit: force-closed at the close of the last bar of "
                 "the month if the stop hasn't hit."
             )
         st.caption(
@@ -292,7 +309,8 @@ if is_orb:
         result = run_orb_backtest(
             monthly_prices, membership, bar_open, bar_high, bar_low, bar_close, fno_symbols,
             lookback_months, skip_months, n_stocks, min_price,
-            orb_direction, range_minutes, max_reentries, position_pct, capital_base,
+            orb_direction, range_minutes, max_reentries, orb_stop_mode, stop_pct,
+            position_pct, capital_base,
         )
 elif is_short:
     fno_symbols = cached_load_fno_symbols()

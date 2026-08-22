@@ -795,6 +795,8 @@ def run_orb_backtest(
     direction: str,
     range_minutes: int = 60,
     max_reentries: int = 4,
+    stop_mode: str = "range",
+    stop_pct: float = 8.0,
     position_pct: float = 5.0,
     capital_base: float = 1_000_000.0,
 ) -> dict:
@@ -820,16 +822,26 @@ def run_orb_backtest(
     avoidance lag as every other hourly strategy in this module -- the
     close that triggers the signal isn't known until the bar closes).
 
-    Stop: long stops on a CLOSE below the range LOW (the opposite edge of
-    the same range, not a computed distance); short stops on a CLOSE
-    above the range HIGH. Also executed at the next bar's open. A stock
-    stopped out mid-month is free to re-trigger the SAME entry condition
-    again later in the SAME month, using the SAME range/stop levels, up
-    to max_reentries times (0 = the first entry only, no re-entry after
-    a stop-out; 4 = up to 4 re-entries, 5 entries total in the month).
-    The count resets every month and only counts entries that actually
-    filled, not signals that failed to fill (e.g. a gap invalidating the
-    stop check below).
+    Stop (stop_mode="range", the default): long stops on a CLOSE below
+    the range LOW (the opposite edge of the same range the entry broke
+    out of, not a computed distance); short stops on a CLOSE above the
+    range HIGH. Every re-entry in a month uses this SAME level, since
+    it's fixed off the range, not off that particular entry's price.
+
+    Stop (stop_mode="fixed_pct"): stop_price = entry_price * (1 -
+    stop_pct/100) for long, entry_price * (1 + stop_pct/100) for short --
+    a conventional fixed % stop, computed fresh off EACH entry's own
+    fill price (so re-entries at a different price get a different stop
+    level, unlike stop_mode="range"). Still a CLOSE-based stop, checked
+    every bar, executed at the next bar's open, same as "range" mode.
+
+    Either mode: also executed at the next bar's open. A stock stopped
+    out mid-month is free to re-trigger the SAME entry condition again
+    later in the SAME month, up to max_reentries times (0 = the first
+    entry only, no re-entry after a stop-out; 4 = up to 4 re-entries, 5
+    entries total in the month). The count resets every month and only
+    counts entries that actually filled, not signals that failed to
+    fill (e.g. a gap invalidating the stop check below).
 
     Exit (time-based): any position still open is force-closed on the
     LAST bar of the last trading day of the month, AT THAT BAR'S OWN
@@ -901,7 +913,7 @@ def run_orb_backtest(
     positions: dict[str, dict] = {}
     trades: list[dict] = []
     equity_series = pd.Series(index=bars, dtype=float)
-    pending_entries: dict[str, tuple[float, int]] = {}  # symbol -> (stop_price, rank)
+    pending_entries: dict[str, int] = {}  # symbol -> rank (stop_price computed at fill time, see below)
     pending_exits: dict[str, str] = {}  # symbol -> exit_reason
     entries_used: dict[str, int] = {}  # symbol -> entries filled so far THIS MONTH
     prev_ridx: int | None = None
@@ -939,14 +951,19 @@ def run_orb_backtest(
             })
 
         for sym in list(pending_entries.keys()):
-            stop_price, entry_rank = pending_entries.pop(sym)
+            entry_rank = pending_entries.pop(sym)
             if sym in positions:
                 continue
-            if sym not in bar_open.columns or bar not in bar_open.index:
+            if sym not in bar_open.columns or bar not in bar_open.index or sym not in ranges:
                 continue
             open_px = bar_open.at[bar, sym]
             if pd.isna(open_px) or open_px <= 0:
                 continue
+            if stop_mode == "fixed_pct":
+                stop_price = open_px * (1 - stop_pct / 100.0) if is_long else open_px * (1 + stop_pct / 100.0)
+            else:
+                range_high, range_low = ranges[sym]
+                stop_price = range_low if is_long else range_high
             if is_long and stop_price >= open_px:
                 continue
             if not is_long and stop_price <= open_px:
@@ -992,15 +1009,15 @@ def run_orb_backtest(
             for sym in list(positions.keys()):
                 if sym in pending_exits or sym not in bar_close.columns or bar not in bar_close.index:
                     continue
-                if sym not in ranges:
-                    continue
                 c = bar_close.at[bar, sym]
                 if pd.isna(c):
                     continue
-                range_high, range_low = ranges[sym]
-                if is_long and c < range_low:
+                # stop_price already reflects stop_mode -- the range's opposite edge, or a
+                # fixed % off this position's own entry price -- so this check is mode-agnostic
+                stop_price = positions[sym]["stop_price"]
+                if is_long and c < stop_price:
                     pending_exits[sym] = "stoploss"
-                elif not is_long and c > range_high:
+                elif not is_long and c > stop_price:
                     pending_exits[sym] = "stoploss"
 
             for sym in universe:
@@ -1015,9 +1032,9 @@ def run_orb_backtest(
                     continue
                 range_high, range_low = ranges[sym]
                 if is_long and c > range_high:
-                    pending_entries[sym] = (range_low, rank_of[sym])
+                    pending_entries[sym] = rank_of[sym]
                 elif not is_long and c < range_low:
-                    pending_entries[sym] = (range_high, rank_of[sym])
+                    pending_entries[sym] = rank_of[sym]
 
         # --- mark to market ---
         mtm = cash
