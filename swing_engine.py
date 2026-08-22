@@ -794,6 +794,7 @@ def run_orb_backtest(
     min_price: float,
     direction: str,
     range_minutes: int = 60,
+    max_reentries: int = 4,
     position_pct: float = 5.0,
     capital_base: float = 1_000_000.0,
 ) -> dict:
@@ -823,9 +824,12 @@ def run_orb_backtest(
     the same range, not a computed distance); short stops on a CLOSE
     above the range HIGH. Also executed at the next bar's open. A stock
     stopped out mid-month is free to re-trigger the SAME entry condition
-    again later in the SAME month, using the SAME range/stop levels --
-    there's no limit on re-entries per month, only on available cash and
-    the entry condition recurring.
+    again later in the SAME month, using the SAME range/stop levels, up
+    to max_reentries times (0 = the first entry only, no re-entry after
+    a stop-out; 4 = up to 4 re-entries, 5 entries total in the month).
+    The count resets every month and only counts entries that actually
+    filled, not signals that failed to fill (e.g. a gap invalidating the
+    stop check below).
 
     Exit (time-based): any position still open is force-closed on the
     LAST bar of the last trading day of the month, AT THAT BAR'S OWN
@@ -899,9 +903,14 @@ def run_orb_backtest(
     equity_series = pd.Series(index=bars, dtype=float)
     pending_entries: dict[str, tuple[float, int]] = {}  # symbol -> (stop_price, rank)
     pending_exits: dict[str, str] = {}  # symbol -> exit_reason
+    entries_used: dict[str, int] = {}  # symbol -> entries filled so far THIS MONTH
+    prev_ridx: int | None = None
 
     for bar in bars:
         ridx = ridx_of_bar[bar]
+        if ridx != prev_ridx:
+            entries_used = {}
+            prev_ridx = ridx
         universe = universe_by_period[ridx][1] if ridx >= 0 else []
         ranges = ranges_by_period[ridx] if ridx >= 0 else {}
         is_month_end_bar = bar in last_bar_of_period
@@ -952,6 +961,7 @@ def run_orb_backtest(
                 "stop_price": stop_price, "risked_rs": qty * risk_per_share,
                 "entry_rank": entry_rank,
             }
+            entries_used[sym] = entries_used.get(sym, 0) + 1
 
         # --- FORCE-CLOSE any open position at THIS bar's own close, if this is the
         # last bar of the month (scheduled square-off, not a next-bar-deferred signal) ---
@@ -995,6 +1005,8 @@ def run_orb_backtest(
 
             for sym in universe:
                 if sym in positions or sym in pending_entries:
+                    continue
+                if entries_used.get(sym, 0) > max_reentries:
                     continue
                 if sym not in bar_close.columns or bar not in bar_close.index or sym not in ranges:
                     continue

@@ -109,6 +109,7 @@ with st.sidebar:
     stop_pct = 8.0
     risk_reward_ratio = 2.0
     range_minutes = 60
+    max_reentries = 4
     position_pct = 5.0
 
     use_target = False
@@ -150,6 +151,12 @@ with st.sidebar:
                  "than one hourly bar isn't computable here. 60 = the first hourly bar of the "
                  "month's first trading day; 120 = the first two, etc."
         )
+        max_reentries = st.slider(
+            "Max re-entries per stock per month", min_value=0, max_value=4, value=4, step=1,
+            help="0 = only the first entry each month, no re-entry after a stop-out. 4 = up to 4 "
+                 "re-entries (5 entries total) at the same range levels if repeatedly stopped out. "
+                 "Resets every month."
+        )
         st.caption(
             "Yahoo Finance only serves hourly data for roughly the trailing 2-3 years, unlike "
             "the daily data used elsewhere in this app which goes back to 2008."
@@ -159,18 +166,20 @@ with st.sidebar:
                 "Range = high/low of the opening window on the month's first trading day, held "
                 "fixed for the whole month. Entry: a bar closes above the range high, filled at "
                 "the next bar's open. Stop: a bar closes below the range LOW (the opposite edge "
-                "of the same range). Re-entry: allowed any time later in the same month if price "
-                "closes above the range high again, using the same stop. Exit: force-closed at "
-                "the close of the last bar of the month if the stop hasn't hit."
+                "of the same range). Re-entry: if stopped out, allowed again later in the same "
+                "month (up to the limit below) if price closes above the range high again, using "
+                "the same stop. Exit: force-closed at the close of the last bar of the month if "
+                "the stop hasn't hit."
             )
         else:
             st.caption(
                 "Range = high/low of the opening window on the month's first trading day, held "
                 "fixed for the whole month. Entry (short): a bar closes below the range low, "
                 "filled at the next bar's open. Stop: a bar closes above the range HIGH (the "
-                "opposite edge of the same range). Re-entry: allowed any time later in the same "
-                "month if price closes below the range low again, using the same stop. Exit: "
-                "force-closed at the close of the last bar of the month if the stop hasn't hit."
+                "opposite edge of the same range). Re-entry: if stopped out, allowed again later "
+                "in the same month (up to the limit below) if price closes below the range low "
+                "again, using the same stop. Exit: force-closed at the close of the last bar of "
+                "the month if the stop hasn't hit."
             )
         st.caption(
             "Universe coverage: hourly data only exists for stocks that were ever in the top "
@@ -283,7 +292,7 @@ if is_orb:
         result = run_orb_backtest(
             monthly_prices, membership, bar_open, bar_high, bar_low, bar_close, fno_symbols,
             lookback_months, skip_months, n_stocks, min_price,
-            orb_direction, range_minutes, position_pct, capital_base,
+            orb_direction, range_minutes, max_reentries, position_pct, capital_base,
         )
 elif is_short:
     fno_symbols = cached_load_fno_symbols()
