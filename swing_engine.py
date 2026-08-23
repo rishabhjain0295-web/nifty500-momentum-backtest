@@ -311,6 +311,7 @@ def run_ema_crossover_backtest(
     ema_slow: int = 50,
     risk_pct: float = 1.0,
     max_position_pct: float = 20.0,
+    min_stop_pct: float = 1.0,
     capital_base: float = 1_000_000.0,
 ) -> dict:
     """EMA(ema_fast)/EMA(ema_slow) crossover swing strategy. Timeframe-
@@ -345,6 +346,21 @@ def run_ema_crossover_backtest(
     max_position_pct and available cash for the same reason documented in
     run_swing_backtest -- a tight stop distance can otherwise demand a
     position far larger than risk_pct alone would suggest.
+
+    min_stop_pct floors the distance used for THIS sizing/reporting math
+    at min_stop_pct% of entry price -- it does NOT change the real exit
+    trigger, which is always evaluated fresh against the CURRENT ema_slow
+    every bar regardless of this floor. It exists because a fresh
+    crossover (the entry signal) frequently happens with price sitting
+    right on top of ema_slow -- the two are close by construction at the
+    moment ef first exceeds es -- which without a floor produced a
+    near-zero risk_per_share on a meaningful minority of trades. Two
+    consequences without the floor: qty always saturated at
+    max_position_pct regardless of how tight the stop actually was
+    (defeating risk_pct as a sizing input for exactly the trades where it
+    should matter most), and risked_rs (and therefore r_multiple, and the
+    page's Avg-R KPI) could blow up to +-hundreds on an otherwise
+    ordinary trade, purely from dividing by a near-zero denominator.
     """
     universe_by_period = _build_universe_calendar(
         monthly_prices, membership, lookback_months, skip_months, n_stocks, min_price
@@ -419,11 +435,17 @@ def run_ema_crossover_backtest(
             open_px = bar_open.at[bar, sym]
             if pd.isna(open_px) or open_px <= 0 or initial_stop >= open_px:
                 continue
-            risk_per_share = open_px - initial_stop
+            risk_per_share = max(open_px - initial_stop, open_px * min_stop_pct / 100.0)
             risk_amount = capital_base * risk_pct / 100.0
             max_position_value = capital_base * max_position_pct / 100.0
             qty = min(risk_amount / risk_per_share, max_position_value / open_px, cash / open_px)
-            if qty <= 0:
+            # Skip economically negligible fills: with no cap on concurrent positions here
+            # (unlike Short Momentum's max_entries), enough simultaneous winners can exhaust
+            # cash and leave a later entry sized down to a near-zero sliver of what's left --
+            # a real position, but too small to mean anything, and its risked_rs (~qty x
+            # risk_per_share) would be near-zero too, right back to the r_multiple blowup
+            # min_stop_pct alone doesn't fully prevent. Better to just not take the trade.
+            if qty * open_px < capital_base * 0.001:
                 continue
             cash -= qty * open_px
             positions[sym] = {
@@ -505,6 +527,7 @@ def run_short_ema_crossover_backtest(
     ema_fast: int = 15,
     ema_slow: int = 50,
     max_entries: int = 10,
+    min_stop_pct: float = 1.0,
     capital_base: float = 2_000_000.0,
     use_target: bool = False,
     risk_reward_ratio: float = 2.0,
@@ -567,6 +590,14 @@ def run_short_ema_crossover_backtest(
     entry price. risked_rs (distance from entry to the initial ema_slow
     stop) is still recorded per trade for R-multiple reporting, it just
     isn't what determines qty here.
+
+    min_stop_pct floors that reporting distance at min_stop_pct% of entry
+    price -- purely for risked_rs/r_multiple sanity, it doesn't touch qty
+    (already fixed by the notional-per-slot rule above) or the real cover
+    trigger (always the CURRENT ema_slow, evaluated fresh every bar).
+    Without it, a fresh crossover -- where price sits right on ema_slow by
+    construction -- could leave risked_rs near zero on a normal-sized
+    position, sending r_multiple to +-hundreds from an ordinary P&L.
 
     Simplification: modeled as directly shorting the stock at its spot
     price (proceeds credited to cash at entry, debited at cover; mark-to-
@@ -667,7 +698,7 @@ def run_short_ema_crossover_backtest(
             if pd.isna(open_px) or open_px <= 0 or initial_stop <= open_px:
                 continue
             qty = notional_per_slot / open_px
-            risk_per_share = initial_stop - open_px
+            risk_per_share = max(initial_stop - open_px, open_px * min_stop_pct / 100.0)
             cash += qty * open_px  # short-sale proceeds
             positions[sym] = {
                 "entry_date": bar, "entry_price": open_px, "qty": qty,

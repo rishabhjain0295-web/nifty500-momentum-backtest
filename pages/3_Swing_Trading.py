@@ -112,6 +112,7 @@ with st.sidebar:
     max_reentries = 4
     orb_stop_mode = "range"
     position_pct = 5.0
+    min_stop_pct = 1.0
 
     use_target = False
 
@@ -130,6 +131,15 @@ with st.sidebar:
             "Entry (short): fast EMA below slow EMA at a bar's close, filled at the next bar's "
             "open. Exit (cover): EITHER close above slow EMA OR fast EMA above slow EMA, also "
             "filled at the next bar's open -- checked every bar for the life of the trade."
+        )
+        min_stop_pct = st.slider(
+            "Minimum stop distance for R-multiple reporting (%)", min_value=0.1, max_value=10.0,
+            value=1.0, step=0.1,
+            help="A fresh crossover often happens with price sitting right on ema_slow, which "
+                 "otherwise makes risked_rs (and r_multiple) blow up from dividing by a near-zero "
+                 "stop distance on an ordinary trade. This floors that distance for sizing/"
+                 "reporting only -- the real cover trigger is always the CURRENT ema_slow, "
+                 "unaffected by this setting."
         )
         use_target = st.checkbox("Enable profit target", value=False)
         if use_target:
@@ -224,6 +234,16 @@ with st.sidebar:
             "Exit: EITHER close below slow EMA OR fast EMA below slow EMA, also filled at the "
             "next bar's open -- checked every bar for the life of the trade. No fixed profit "
             "target; this is a pure trend-following exit."
+        )
+        min_stop_pct = st.slider(
+            "Minimum stop distance for sizing/R-multiple (%)", min_value=0.1, max_value=10.0,
+            value=1.0, step=0.1,
+            help="A fresh crossover often happens with price sitting right on ema_slow, which "
+                 "otherwise both saturates position size at the max-position cap regardless of "
+                 "how tight the real stop is, and makes risked_rs (and r_multiple) blow up from "
+                 "dividing by a near-zero stop distance. This floors that distance for sizing/"
+                 "reporting only -- the real exit trigger is always the CURRENT ema_slow, "
+                 "unaffected by this setting."
         )
     else:
         st.header("Entry strategy")
@@ -322,7 +342,7 @@ elif is_short:
             result = run_short_ema_crossover_backtest(
                 monthly_prices, membership, bar_open, bar_close, fno_symbols,
                 lookback_months, skip_months, n_stocks, min_price,
-                ema_fast, ema_slow, max_entries, capital_base,
+                ema_fast, ema_slow, max_entries, min_stop_pct, capital_base,
                 use_target, risk_reward_ratio,
             )
     else:
@@ -331,7 +351,7 @@ elif is_short:
             result = run_short_ema_crossover_backtest(
                 monthly_prices, membership, bar_open, bar_close, fno_symbols,
                 lookback_months, skip_months, n_stocks, min_price,
-                ema_fast, ema_slow, max_entries, capital_base,
+                ema_fast, ema_slow, max_entries, min_stop_pct, capital_base,
                 use_target, risk_reward_ratio,
             )
 elif is_ema:
@@ -343,7 +363,7 @@ elif is_ema:
             result = run_ema_crossover_backtest(
                 monthly_prices, membership, bar_open, bar_close,
                 lookback_months, skip_months, n_stocks, min_price,
-                ema_fast, ema_slow, risk_pct, max_position_pct, capital_base,
+                ema_fast, ema_slow, risk_pct, max_position_pct, min_stop_pct, capital_base,
             )
     else:
         with st.spinner("Running EMA crossover backtest (daily bars, full history)..."):
@@ -351,7 +371,7 @@ elif is_ema:
             result = run_ema_crossover_backtest(
                 monthly_prices, membership, daily_open, daily_close,
                 lookback_months, skip_months, n_stocks, min_price,
-                ema_fast, ema_slow, risk_pct, max_position_pct, capital_base,
+                ema_fast, ema_slow, risk_pct, max_position_pct, min_stop_pct, capital_base,
             )
 else:
     daily_open, daily_high, daily_low, daily_close = cached_load_daily_ohlc()
