@@ -8,6 +8,14 @@ Lets you customise the number of stocks held, the rebalancing period, and
 the trailing-return lookback period (plus skip period, min price filter,
 and whether to enforce point-in-time index membership), and see the
 resulting strategy performance vs. the Nifty 500 benchmark update live.
+
+Rebalancing frequency is itself customizable -- Monthly (the original
+mode, hold 1-12 months, lookback 1-24 months) or Weekly (hold 1-6 weeks,
+lookback 4-104 weeks). Weekly mode re-derives the whole strategy on a
+weekly price grid (see backtest_engine.load_prices' freq param) rather
+than just rebalancing a monthly ranking more often. The GOLDBEES regime
+filter is monthly-only for now -- its 150/55 lookback windows are
+calibrated in months and aren't auto-converted to weeks.
 """
 import numpy as np
 import pandas as pd
@@ -55,25 +63,48 @@ st.caption(
 with st.sidebar:
     st.header("Strategy parameters")
     n_stocks = st.slider("Number of stocks held", min_value=5, max_value=100, value=30, step=5)
-    hold_months = st.slider("Rebalancing period (months)", min_value=1, max_value=12, value=1, step=1)
-    lookback_months = st.slider("Trailing return lookback (months)", min_value=1, max_value=24, value=12, step=1)
-    skip_months = st.slider(
-        "Skip period (months)", min_value=0, max_value=3, value=1, step=1,
-        help="Excludes the most recent N months from the lookback, to avoid short-term reversal effects."
+
+    rebal_freq_label = st.radio(
+        "Rebalancing frequency", ["Monthly", "Weekly"], index=0,
+        help="Weekly re-derives the entire strategy (price series, ranking lookback/skip, "
+             "rebalancing) on a weekly grid instead of monthly -- not just a faster rebalance "
+             "of the same monthly ranking. The GOLDBEES regime filter isn't available in weekly "
+             "mode yet (its lookback windows are calibrated in months)."
     )
+    is_weekly = rebal_freq_label == "Weekly"
+    period_word = "week" if is_weekly else "month"
+    price_freq = "W-FRI" if is_weekly else "ME"
+
+    if is_weekly:
+        hold_months = st.slider("Rebalancing period (weeks)", min_value=1, max_value=6, value=1, step=1)
+        lookback_months = st.slider(
+            "Trailing return lookback (weeks)", min_value=4, max_value=104, value=52, step=1,
+            help="52 weeks is the weekly equivalent of the monthly mode's 12-month default."
+        )
+        skip_months = st.slider(
+            "Skip period (weeks)", min_value=0, max_value=12, value=4, step=1,
+            help="Excludes the most recent N weeks from the lookback, to avoid short-term reversal effects."
+        )
+    else:
+        hold_months = st.slider("Rebalancing period (months)", min_value=1, max_value=12, value=1, step=1)
+        lookback_months = st.slider("Trailing return lookback (months)", min_value=1, max_value=24, value=12, step=1)
+        skip_months = st.slider(
+            "Skip period (months)", min_value=0, max_value=3, value=1, step=1,
+            help="Excludes the most recent N months from the lookback, to avoid short-term reversal effects."
+        )
 
     weighting_label = st.radio(
         "Rebalancing weight method",
-        ["Equal weight every month", "Equal weight at rebalance, drift between"],
+        [f"Equal weight every {period_word}", "Equal weight at rebalance, drift between"],
         index=0,
-        help="Equal weight every month: weights reset to exactly 1/N every month, even between "
-             "rebalances -- a winner's gain never lets it grow as a share of the portfolio for "
-             "next month. Equal weight at rebalance, drift between: weights are set to 1/N only "
-             "at each rebalance; between rebalances a stock's own performance lets its weight "
-             "drift up or down (winners compound, laggards shrink) until the next rebalance "
-             "resets everyone -- this is how real equal-weight index funds/ETFs actually work."
+        help=f"Equal weight every {period_word}: weights reset to exactly 1/N every {period_word}, "
+             "even between rebalances -- a winner's gain never lets it grow as a share of the "
+             f"portfolio for next {period_word}. Equal weight at rebalance, drift between: weights "
+             "are set to 1/N only at each rebalance; between rebalances a stock's own performance "
+             "lets its weight drift up or down (winners compound, laggards shrink) until the next "
+             "rebalance resets everyone -- this is how real equal-weight index funds/ETFs actually work."
     )
-    weighting_mode = "equal_monthly" if weighting_label == "Equal weight every month" else "drift"
+    weighting_mode = "equal_monthly" if weighting_label.startswith("Equal weight every") else "drift"
 
     use_stoploss = st.checkbox(
         "Per-stock stoploss", value=False,
@@ -102,18 +133,18 @@ with st.sidebar:
         )
 
     use_execution_lag = st.checkbox(
-        "T+1 execution (signal at month-end close, trade at next open)", value=False,
-        help="Realistic execution timing: the rebalance ranking is still computed from the "
-             "month-end close (unchanged), but entries and exits are executed on the NEXT "
-             "trading day. A stock being dropped is held (and keeps accruing return) through "
+        f"T+1 execution (signal at {period_word}-end close, trade at next open)", value=False,
+        help=f"Realistic execution timing: the rebalance ranking is still computed from the "
+             f"{period_word}-end close (unchanged), but entries and exits are executed on the "
+             "NEXT trading day. A stock being dropped is held (and keeps accruing return) through "
              "that next day's open, where it's sold; a stock being added is bought at that "
              "open, so it only starts accruing return from there. Stocks that stay held across "
              "a rebalance are unaffected. Requires daily price data (a bit slower to compute)."
     )
     if use_stoploss and use_execution_lag:
         st.caption(
-            "Note: stoploss and T+1 execution don't currently compose -- for any month where "
-            "both would apply, T+1 execution's calculation wins (it doesn't account for "
+            f"Note: stoploss and T+1 execution don't currently compose -- for any {period_word} "
+            "where both would apply, T+1 execution's calculation wins (it doesn't account for "
             "stops/re-entries happening intra-period)."
         )
 
@@ -135,18 +166,27 @@ with st.sidebar:
             f"exits once its rank falls below {exit_rank_preview}."
         )
 
-    use_regime_filter = st.checkbox(
-        "GOLDBEES defensive rotation", value=False,
-        help="Optional regime filter. At each rebalance: while running the momentum "
-             "portfolio, if GOLDBEES's trailing return beats the Nifty 500's over the "
-             "entry lookback, switch the ENTIRE portfolio to GOLDBEES. While in GOLDBEES, "
-             "switch back to the momentum portfolio once the Nifty 500's trailing return "
-             "beats GOLDBEES's over the (shorter) exit lookback. Uses GOLDBEES (Nippon "
-             "India ETF Gold BeES) as the actual investable gold instrument, not a spot "
-             "gold index."
-    )
+    use_regime_filter = False
     gold_entry_lookback = 150
     gold_exit_lookback = 55
+    if is_weekly:
+        st.caption(
+            "GOLDBEES defensive rotation isn't available in weekly mode yet -- its 150/55 "
+            "lookback windows are calibrated in months, and reinterpreting them as weeks would "
+            "silently change the regime timing rather than just rebalancing faster. Switch back "
+            "to Monthly to use it."
+        )
+    else:
+        use_regime_filter = st.checkbox(
+            "GOLDBEES defensive rotation", value=False,
+            help="Optional regime filter. At each rebalance: while running the momentum "
+                 "portfolio, if GOLDBEES's trailing return beats the Nifty 500's over the "
+                 "entry lookback, switch the ENTIRE portfolio to GOLDBEES. While in GOLDBEES, "
+                 "switch back to the momentum portfolio once the Nifty 500's trailing return "
+                 "beats GOLDBEES's over the (shorter) exit lookback. Uses GOLDBEES (Nippon "
+                 "India ETF Gold BeES) as the actual investable gold instrument, not a spot "
+                 "gold index."
+        )
     if use_regime_filter:
         gold_entry_lookback = st.number_input(
             "GOLDBEES entry lookback (months)", min_value=1, max_value=200, value=150, step=1,
@@ -207,7 +247,7 @@ with st.sidebar:
         ltcg_exemption = st.number_input("LTCG exemption per year (Rs)", min_value=0.0, value=125_000.0, step=25_000.0)
         cess_pct = st.number_input("Health & education cess on tax (%)", min_value=0.0, value=4.0, step=1.0)
 
-monthly_prices = cached_load_prices(price_col)
+monthly_prices = cached_load_prices(price_col, price_freq)
 
 membership = None
 if use_membership_filter:
@@ -215,7 +255,7 @@ if use_membership_filter:
         tuple(monthly_prices.index.values), tuple(monthly_prices.columns)
     )
 
-bench_px = cached_load_benchmark(price_col)
+bench_px = cached_load_benchmark(price_col, price_freq)
 gold_px = cached_load_gold(price_col) if use_regime_filter else None
 
 strat_rets, holdings_history = run_backtest(
@@ -229,13 +269,16 @@ if use_stoploss or use_execution_lag:
     daily_close, daily_open = cached_load_daily_prices(price_col)
     if use_stoploss:
         stoploss_overlay = apply_stoploss(
-            monthly_prices, daily_close, daily_open, holdings_history, stoploss_pct, max_reentries
+            monthly_prices, daily_close, daily_open, holdings_history, stoploss_pct, max_reentries,
+            resample_freq=price_freq,
         )
         for m_date, r in stoploss_overlay.items():
             if m_date in strat_rets.index:
                 strat_rets.loc[m_date] = r
     if use_execution_lag:
-        exec_lag_overlay = apply_execution_lag(monthly_prices, daily_close, daily_open, holdings_history)
+        exec_lag_overlay = apply_execution_lag(
+            monthly_prices, daily_close, daily_open, holdings_history, resample_freq=price_freq
+        )
         for m_date, r in exec_lag_overlay.items():
             if m_date in strat_rets.index:
                 strat_rets.loc[m_date] = r
@@ -243,8 +286,9 @@ if use_stoploss or use_execution_lag:
 bench_rets = bench_px.pct_change().reindex(strat_rets.index).dropna()
 strat_rets = strat_rets.reindex(bench_rets.index)
 
-strat_stats = perf_stats(strat_rets)
-bench_stats = perf_stats(bench_rets)
+perf_freq = 52 if is_weekly else 12
+strat_stats = perf_stats(strat_rets, freq=perf_freq)
+bench_stats = perf_stats(bench_rets, freq=perf_freq)
 
 cost_tax_result = None
 post_cost_stats = None
@@ -262,8 +306,8 @@ if apply_costs_taxes and len(strat_rets) > 0:
             ltcg_exemption_rs=ltcg_exemption, cess_pct=cess_pct,
         ),
     )
-    post_cost_stats = perf_stats(cost_tax_result["nav_post_cost"].pct_change().dropna())
-    post_tax_stats = perf_stats(cost_tax_result["nav_net"].pct_change().dropna())
+    post_cost_stats = perf_stats(cost_tax_result["nav_post_cost"].pct_change().dropna(), freq=perf_freq)
+    post_tax_stats = perf_stats(cost_tax_result["nav_net"].pct_change().dropna(), freq=perf_freq)
 
 st.subheader("Performance")
 cols = st.columns(5)
@@ -311,9 +355,9 @@ if post_tax_stats is not None:
 
 if len(strat_rets) == 0:
     st.warning(
-        "No months produced a valid portfolio -- likely `Number of stocks held` is larger "
-        "than the number of eligible stocks available early in the sample. Try lowering it "
-        "or shortening the lookback."
+        f"No {period_word}s produced a valid portfolio -- likely `Number of stocks held` is "
+        "larger than the number of eligible stocks available early in the sample. Try lowering "
+        "it or shortening the lookback."
     )
 else:
     st.subheader("Equity curve")
@@ -507,14 +551,14 @@ else:
         st.write(f"**Date range:** {monthly_prices.index.min().date()} to {monthly_prices.index.max().date()}")
         if membership is not None:
             avg_eligible = membership.sum(axis=1).replace(0, np.nan).mean()
-            st.write(f"**Avg. eligible stocks/month (point-in-time):** {avg_eligible:.0f}")
+            st.write(f"**Avg. eligible stocks/{period_word} (point-in-time):** {avg_eligible:.0f}")
         st.write(f"**Rebalances:** {len(holdings_history)}")
 
-    with st.expander("Monthly returns (strategy vs benchmark)"):
+    with st.expander(f"{period_word.capitalize()}ly returns (strategy vs benchmark)"):
         out = pd.DataFrame({"strategy_return": strat_rets, "benchmark_return": bench_rets})
         st.dataframe(out.style.format("{:.2%}"), height=300)
         st.download_button(
-            "Download monthly returns as CSV",
+            f"Download {period_word}ly returns as CSV",
             out.to_csv().encode("utf-8"),
             file_name="momentum_backtest_results.csv",
             mime="text/csv",

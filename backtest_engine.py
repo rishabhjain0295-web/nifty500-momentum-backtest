@@ -79,8 +79,17 @@ def ensure_hourly_data(archive_url: str | None = None) -> None:
     _ensure_data_from_archive(HOURLY_DIR, archive_url, "HOURLY_ARCHIVE_URL", HOURLY_ARCHIVE_URL)
 
 
-def load_prices(price_col: str = "Adj Close") -> pd.DataFrame:
-    """Load all stock CSVs into one wide DataFrame of monthly prices, symbol columns."""
+def load_prices(price_col: str = "Adj Close", freq: str = "ME") -> pd.DataFrame:
+    """Load all stock CSVs into one wide DataFrame of period-end prices,
+    symbol columns. freq is any pandas resample rule -- "ME" (the default,
+    calendar month-end) for the monthly rebalancing engine everywhere else
+    in this app, or "W-FRI" (calendar week ending Friday) for the Backtest
+    page's weekly rebalancing option. run_backtest and
+    compute_momentum_ranking don't care which -- they treat the DataFrame's
+    rows as generic rebalance-eligible periods, using integer row offsets
+    for lookback/skip, not calendar-month arithmetic -- so lookback/skip/
+    hold counts passed alongside a "W-FRI" frame are interpreted in WEEKS,
+    not months."""
     frames = {}
     for f in STOCKS_DIR.glob("*.csv"):
         sym = f.stem
@@ -97,7 +106,7 @@ def load_prices(price_col: str = "Adj Close") -> pd.DataFrame:
     if not frames:
         raise RuntimeError(f"No usable price data found in {STOCKS_DIR}")
     wide = pd.DataFrame(frames).sort_index()
-    return wide.resample("ME").last()
+    return wide.resample(freq).last()
 
 
 def load_daily_prices(price_col: str = "Adj Close") -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -256,12 +265,12 @@ def load_2h_ohlc() -> tuple[pd.DataFrame, pd.DataFrame]:
     return open_2h.sort_index(), close_2h.sort_index()
 
 
-def load_benchmark(price_col: str = "Adj Close") -> pd.Series:
+def load_benchmark(price_col: str = "Adj Close", freq: str = "ME") -> pd.Series:
     f = INDEX_DIR / "NIFTY500.csv"
     df = pd.read_csv(f, index_col=0, parse_dates=True)
     col = price_col if price_col in df.columns else "Close"
     s = df[col].dropna().sort_index()
-    return s.resample("ME").last()
+    return s.resample(freq).last()
 
 
 def load_gold_series(price_col: str = "Adj Close") -> pd.Series:
@@ -558,6 +567,7 @@ def apply_stoploss(
     holdings_history: list[tuple[pd.Timestamp, list[str]]],
     stoploss_pct: float,
     max_reentries: int,
+    resample_freq: str = "ME",
 ) -> dict[pd.Timestamp, float]:
     """Re-simulates portfolio returns at daily granularity for every
     momentum-regime holding period in holdings_history (GOLD-regime periods
@@ -591,9 +601,13 @@ def apply_stoploss(
     stock was actually bought at, which "equal_monthly" (reset to equal
     weight every month) doesn't preserve.
 
-    Returns {month_end_date: return} for the recomputed months only. The
-    caller merges this into the baseline portfolio_rets from run_backtest,
-    leaving GOLD-regime and pre-first-rebalance months unchanged.
+    Returns {period_end_date: return} for the recomputed periods only,
+    resampled with resample_freq (default "ME" -- must match whatever
+    period grid monthly_prices/holdings_history actually use, e.g. "W-FRI"
+    for weekly rebalancing, or the merge back into portfolio_rets won't
+    line up). The caller merges this into the baseline portfolio_rets from
+    run_backtest, leaving GOLD-regime and pre-first-rebalance periods
+    unchanged.
     """
     stop_frac = stoploss_pct / 100.0
     monthly_result: dict[pd.Timestamp, float] = {}
@@ -656,9 +670,9 @@ def apply_stoploss(
                         reentry_count += 1
                     prev_price = px_close
 
-        monthly_from_daily = (1 + daily_port_ret).resample("ME").prod() - 1
-        for m_date, r in monthly_from_daily.items():
-            monthly_result[m_date] = r
+        period_from_daily = (1 + daily_port_ret).resample(resample_freq).prod() - 1
+        for p_date, r in period_from_daily.items():
+            monthly_result[p_date] = r
 
     return monthly_result
 
@@ -668,6 +682,7 @@ def apply_execution_lag(
     daily_close: pd.DataFrame,
     daily_open: pd.DataFrame,
     holdings_history: list[tuple[pd.Timestamp, list[str]]],
+    resample_freq: str = "ME",
 ) -> dict[pd.Timestamp, float]:
     """Re-simulates portfolio returns reflecting T+1-open execution: the
     rebalance SIGNAL is still generated from the month-end close (unchanged
@@ -691,11 +706,13 @@ def apply_execution_lag(
     prior period, which ends at that rebalance date, is unaffected -- the
     old holdings genuinely were held through that close in both models).
 
-    Returns {month_end_date: return} for every month following a rebalance
-    where the holdings list actually changed. Months with no change, GOLD-
-    regime months, and the very first holding period (nothing to compare
-    against, since there's no "previous" holdings list yet) are left
-    untouched by the caller.
+    Returns {period_end_date: return} for every period following a
+    rebalance where the holdings list actually changed, resampled with
+    resample_freq (default "ME" -- must match monthly_prices/
+    holdings_history's own period grid, e.g. "W-FRI" for weekly
+    rebalancing). Periods with no change, GOLD-regime periods, and the
+    very first holding period (nothing to compare against, since there's
+    no "previous" holdings list yet) are left untouched by the caller.
     """
     monthly_result: dict[pd.Timestamp, float] = {}
     last_daily_date = daily_close.index.max()
@@ -766,9 +783,9 @@ def apply_execution_lag(
                     daily_port_ret.loc[d] += (px / prev_price - 1) / n
                 prev_price = px
 
-        monthly_from_daily = (1 + daily_port_ret).resample("ME").prod() - 1
-        for m_date, r in monthly_from_daily.items():
-            monthly_result[m_date] = r
+        period_from_daily = (1 + daily_port_ret).resample(resample_freq).prod() - 1
+        for p_date, r in period_from_daily.items():
+            monthly_result[p_date] = r
 
         prev_holdings = curr_holdings
 

@@ -26,13 +26,13 @@ from ema_rs_rotation_engine import load_data as load_ema_rs_data
 
 
 @st.cache_data(show_spinner="Loading stock price history...")
-def cached_load_prices(price_col: str) -> pd.DataFrame:
-    return load_prices(price_col)
+def cached_load_prices(price_col: str, freq: str = "ME") -> pd.DataFrame:
+    return load_prices(price_col, freq)
 
 
 @st.cache_data(show_spinner="Loading benchmark...")
-def cached_load_benchmark(price_col: str) -> pd.Series:
-    return load_benchmark(price_col)
+def cached_load_benchmark(price_col: str, freq: str = "ME") -> pd.Series:
+    return load_benchmark(price_col, freq)
 
 
 @st.cache_data(show_spinner="Loading gold price history...")
