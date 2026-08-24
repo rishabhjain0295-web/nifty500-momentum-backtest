@@ -32,6 +32,7 @@ STOCKS_DIR = ROOT / "data" / "stocks"
 INDEX_DIR = ROOT / "data" / "index"
 ETF_DIR = ROOT / "data" / "etfs"
 HOURLY_DIR = ROOT / "data" / "hourly"
+FIFTEEN_MIN_DIR = ROOT / "data" / "15min"
 MEMBERSHIP_CSV = ROOT / "data" / "nifty500_membership_calendar.csv"
 
 # data/stocks/ and data/hourly/ are too large to commit to git -- both are
@@ -41,6 +42,7 @@ MEMBERSHIP_CSV = ROOT / "data" / "nifty500_membership_calendar.csv"
 # updated after the release is created.
 DATA_ARCHIVE_URL = "https://github.com/rishabhjain0295-web/nifty500-momentum-backtest/releases/download/data-v1/stocks.zip"
 HOURLY_ARCHIVE_URL = "https://github.com/rishabhjain0295-web/nifty500-momentum-backtest/releases/download/data-v1/hourly.zip"
+FIFTEEN_MIN_ARCHIVE_URL = "https://github.com/rishabhjain0295-web/nifty500-momentum-backtest/releases/download/data-v1/15min.zip"
 
 
 def _ensure_data_from_archive(target_dir: Path, archive_url: str | None, env_var: str, fallback_url: str) -> None:
@@ -77,6 +79,13 @@ def ensure_hourly_data(archive_url: str | None = None) -> None:
     strategy's hourly variant) from a GitHub Release asset if it's not
     already present. No-op if data/hourly/ already has files."""
     _ensure_data_from_archive(HOURLY_DIR, archive_url, "HOURLY_ARCHIVE_URL", HOURLY_ARCHIVE_URL)
+
+
+def ensure_15min_data(archive_url: str | None = None) -> None:
+    """Download and extract data/15min/ (used by the RSI Oversold Reversal
+    swing strategy's 15-min/30-min variants) from a GitHub Release asset if
+    it's not already present. No-op if data/15min/ already has files."""
+    _ensure_data_from_archive(FIFTEEN_MIN_DIR, archive_url, "FIFTEEN_MIN_ARCHIVE_URL", FIFTEEN_MIN_ARCHIVE_URL)
 
 
 def load_prices(price_col: str = "Adj Close", freq: str = "ME") -> pd.DataFrame:
@@ -263,6 +272,66 @@ def load_2h_ohlc() -> tuple[pd.DataFrame, pd.DataFrame]:
     open_2h.index = label.reindex(open_2h.index).values
     close_2h.index = label.reindex(close_2h.index).values
     return open_2h.sort_index(), close_2h.sort_index()
+
+
+def load_15min_full_ohlc() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Open/High/Low/Close from data/15min/ (see scripts/download_15min_
+    data.py), for the RSI Oversold Reversal swing strategy's finer
+    timeframe options -- the only strategy in this app needing sub-hourly
+    bars. Yahoo Finance caps intervals finer than 1h at a 60-DAY trailing
+    window (not ~2-3yr like load_hourly_full_ohlc, let alone ~18yr of
+    daily data) -- a hard limit, not a download choice, so results from
+    this are a short recent sample, not a real multi-year backtest."""
+    open_frames, high_frames, low_frames, close_frames = {}, {}, {}, {}
+    for f in FIFTEEN_MIN_DIR.glob("*.csv"):
+        sym = f.stem
+        try:
+            df = pd.read_csv(f, index_col=0, parse_dates=True)
+        except Exception:
+            continue
+        if not {"Open", "High", "Low", "Close"}.issubset(df.columns) or df.empty:
+            continue
+        if df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
+        o, h, l, c = df["Open"].dropna(), df["High"].dropna(), df["Low"].dropna(), df["Close"].dropna()
+        if o.empty or h.empty or l.empty or c.empty:
+            continue
+        open_frames[sym] = o
+        high_frames[sym] = h
+        low_frames[sym] = l
+        close_frames[sym] = c
+    if not close_frames:
+        raise RuntimeError(f"No usable 15-minute data found in {FIFTEEN_MIN_DIR}")
+    return (
+        pd.DataFrame(open_frames).sort_index(),
+        pd.DataFrame(high_frames).sort_index(),
+        pd.DataFrame(low_frames).sort_index(),
+        pd.DataFrame(close_frames).sort_index(),
+    )
+
+
+def load_30min_full_ohlc() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Resamples load_15min_full_ohlc()'s bars into 30-minute bars, same
+    session-anchored pairing as load_2h_ohlc (NSE's session starts at
+    9:15, not on an even clock boundary): (9:15,9:30), (9:45,10:00), ...
+    -- open = the pair's first bar's open, close = the pair's last bar's
+    close, high/low = the pair's max high / min low, labeled with the
+    last bar's timestamp. Same ~60-day window caveat as the 15-minute
+    data it's built from."""
+    o15, h15, l15, c15 = load_15min_full_ohlc()
+    day = pd.Series(c15.index.date, index=c15.index)
+    pair_seq = c15.groupby(day).cumcount() // 2
+    pair_key = day.astype(str) + "_" + pair_seq.astype(str)
+    bar_ts = pd.Series(c15.index, index=c15.index)
+
+    label = bar_ts.groupby(pair_key).last()
+    open_30 = o15.groupby(pair_key).first()
+    high_30 = h15.groupby(pair_key).max()
+    low_30 = l15.groupby(pair_key).min()
+    close_30 = c15.groupby(pair_key).last()
+    for frame in (open_30, high_30, low_30, close_30):
+        frame.index = label.reindex(frame.index).values
+    return open_30.sort_index(), high_30.sort_index(), low_30.sort_index(), close_30.sort_index()
 
 
 def load_benchmark(price_col: str = "Adj Close", freq: str = "ME") -> pd.Series:

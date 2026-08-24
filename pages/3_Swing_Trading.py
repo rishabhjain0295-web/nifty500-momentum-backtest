@@ -1,7 +1,7 @@
 """
 Swing trading: scans a momentum-ranked universe (same ranking formula as
 the Backtest page) each month for entries, trades them individually
-instead of holding a rebalanced basket. Four strategy families:
+instead of holding a rebalanced basket. Five strategy families:
   - Breakout (gap-up / Donchian channel), long, top-N momentum, with an
     R-multiple profit target.
   - EMA 15/50 crossover, long, top-N momentum, daily or hourly bars, no
@@ -17,6 +17,11 @@ instead of holding a rebalanced basket. Four strategy families:
     See run_orb_backtest's docstring for the exact mechanics (opening
     range captured on each month's first trading day, held fixed for the
     month, re-entries allowed, forced exit at month end).
+  - RSI Oversold Reversal, long, top-N momentum, 15-min/30-min/hourly
+    bars, with an R-multiple target and a calendar-day time exit. See
+    run_rsi_reversal_backtest's docstring -- 15-min/30-min are capped at
+    Yahoo Finance's ~60-day trailing window, much shorter than hourly's
+    ~2-3yr.
 See swing_engine.py for the full mechanics and the design assumptions
 made where the source spec was ambiguous.
 """
@@ -24,9 +29,11 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from backtest_engine import NSE_UNIVERSES, ensure_hourly_data, ensure_stock_data
+from backtest_engine import NSE_UNIVERSES, ensure_15min_data, ensure_hourly_data, ensure_stock_data
 from streamlit_cache import (
     cached_load_2h_ohlc,
+    cached_load_15min_full_ohlc,
+    cached_load_30min_full_ohlc,
     cached_load_daily_ohlc,
     cached_load_fno_symbols,
     cached_load_hourly_full_ohlc,
@@ -38,6 +45,7 @@ from streamlit_cache import (
 from swing_engine import (
     run_ema_crossover_backtest,
     run_orb_backtest,
+    run_rsi_reversal_backtest,
     run_short_ema_crossover_backtest,
     run_swing_backtest,
 )
@@ -61,12 +69,13 @@ with st.sidebar:
     strategy_label = st.radio(
         "Strategy type",
         ["Breakout (gap-up / Donchian)", "EMA 15/50 crossover", "Short Momentum (F&O)",
-         "ORB (Opening Range Breakout)"],
+         "ORB (Opening Range Breakout)", "RSI Oversold Reversal"],
         index=0,
     )
     is_ema = strategy_label == "EMA 15/50 crossover"
     is_short = strategy_label == "Short Momentum (F&O)"
     is_orb = strategy_label == "ORB (Opening Range Breakout)"
+    is_rsi = strategy_label == "RSI Oversold Reversal"
 
     orb_direction = "long"
     if is_orb:
@@ -133,6 +142,10 @@ with st.sidebar:
     orb_stop_mode = "range"
     position_pct = 5.0
     min_stop_pct = 1.0
+    rsi_period = 14
+    rsi_threshold = 31.0
+    max_hold_days = 45
+    max_stop_pct = 4.0
 
     use_target = False
 
@@ -265,6 +278,66 @@ with st.sidebar:
                  "reporting only -- the real exit trigger is always the CURRENT ema_slow, "
                  "unaffected by this setting."
         )
+    elif is_rsi:
+        st.header("RSI Oversold Reversal")
+        timeframe = st.radio(
+            "Timeframe", ["15 Min (~60 days only)", "30 Min (~60 days only)", "1 Hour (~2-3 years)"],
+            index=2,
+        )
+        if timeframe.startswith(("15 Min", "30 Min")):
+            st.caption(
+                "Yahoo Finance caps intervals finer than 1 hour at a ~60-day trailing window -- "
+                "much shorter than the ~2-3 years available at 1 hour, let alone the ~18 years "
+                "of daily data used elsewhere in this app. Treat results here as a short recent "
+                "sample, not a real multi-year backtest -- there's rarely room for more than a "
+                "trade or two per stock to fully play out (especially with a 45-day time exit) "
+                "in a 60-day window."
+            )
+        else:
+            st.caption(
+                "Yahoo Finance only serves hourly data for roughly the trailing 2-3 years, "
+                "unlike the daily data used elsewhere in this app which goes back to 2008."
+            )
+        rsi_period = st.number_input("RSI period (bars)", min_value=2, max_value=50, value=14, step=1)
+        rsi_threshold = st.slider(
+            "RSI oversold-recovery threshold", min_value=20.0, max_value=40.0, value=31.0, step=0.5,
+            help="A bar is marked as an 'alert candle' the first time RSI closes at or above this "
+                 "level, having closed below it the bar before -- a fresh recovery out of "
+                 "oversold, not just 'RSI is currently above this'."
+        )
+        st.caption(
+            "Entry: a bar closes above the alert candle's high, filled at the next bar's open. "
+            "Only the MOST RECENT alert candle is active per stock -- a later RSI cross "
+            "replaces an earlier untriggered one, and an alert is used up the moment a close "
+            "breaks its high, whether or not the trade actually fills."
+        )
+        risk_reward_ratio = st.slider(
+            "Target: multiple of initial risk (target = entry + this x risk)",
+            min_value=2.0, max_value=50.0, value=5.0, step=0.5,
+            help="Risk = entry price minus the alert candle's low. E.g. 5.0 = target is 5x that "
+                 "distance above entry. The wide range (up to 50x) reflects how tight a stop can "
+                 "be here -- capped by the max stop % below, but real candle ranges can still be "
+                 "very small on a 15/30-min chart."
+        )
+        max_hold_days = st.number_input(
+            "Time exit (calendar days)", min_value=1, max_value=365, value=45, step=1,
+            help="If neither the stop nor the target has fired within this many calendar days "
+                 "of entry, the position is closed at the next bar's open regardless."
+        )
+        max_stop_pct = st.slider(
+            "Skip the trade if stoploss exceeds this % of entry", min_value=0.5, max_value=20.0,
+            value=4.0, step=0.5,
+            help="Checked at FILL time using the actual next-bar open, not the alert candle's "
+                 "own close. If the alert candle's low implies a stop wider than this, the trade "
+                 "is skipped entirely rather than taken with a larger-than-intended risk."
+        )
+        min_stop_pct = st.slider(
+            "Minimum stop distance for sizing/R-multiple (%)", min_value=0.05, max_value=5.0,
+            value=0.1, step=0.05,
+            help="Floors the risk distance used for position sizing and r_multiple reporting "
+                 "only, guarding the rare case of a near-zero-range alert candle. Rarely binds "
+                 "here since the max-stop setting above already caps the top end."
+        )
     else:
         st.header("Entry strategy")
         entry_label = st.radio("Entry signal", ["Gap-up breakout", "Donchian channel breakout"], index=0)
@@ -322,7 +395,7 @@ with st.sidebar:
             help="Position size is set so a stop-out loses exactly this % of starting capital -- "
                  "subject to the position-size cap below, which usually binds first on tight stops."
         )
-        if not is_ema:
+        if not is_ema and not is_rsi:
             risk_reward_ratio = st.number_input(
                 "Risk:reward ratio (target = entry + this x risk)", min_value=0.5, max_value=20.0, value=2.0, step=0.5,
                 help="E.g. 2.0 = 1:2 -- target is twice the initial risk distance above entry. 10.0 = 1:10."
@@ -395,6 +468,28 @@ elif is_ema:
                 ema_fast, ema_slow, risk_pct, max_position_pct, min_stop_pct, capital_base,
                 allowed_symbols=universe_allowed_symbols,
             )
+elif is_rsi:
+    if timeframe.startswith("15 Min"):
+        with st.spinner("Fetching 15-minute price data (first run only)..."):
+            ensure_15min_data()
+        with st.spinner("Running RSI Reversal backtest (15-minute bars, ~60 day window)..."):
+            bar_open, bar_high, bar_low, bar_close = cached_load_15min_full_ohlc()
+    elif timeframe.startswith("30 Min"):
+        with st.spinner("Fetching 15-minute price data (first run only)..."):
+            ensure_15min_data()
+        with st.spinner("Running RSI Reversal backtest (30-minute bars, ~60 day window)..."):
+            bar_open, bar_high, bar_low, bar_close = cached_load_30min_full_ohlc()
+    else:
+        with st.spinner("Fetching hourly price data (first run only)..."):
+            ensure_hourly_data()
+        with st.spinner("Running RSI Reversal backtest (hourly bars, ~2-3 year window)..."):
+            bar_open, bar_high, bar_low, bar_close = cached_load_hourly_full_ohlc()
+    result = run_rsi_reversal_backtest(
+        monthly_prices, membership, bar_open, bar_high, bar_low, bar_close,
+        lookback_months, skip_months, n_stocks, min_price,
+        rsi_period, rsi_threshold, risk_reward_ratio, max_hold_days, max_stop_pct, min_stop_pct,
+        risk_pct, max_position_pct, capital_base, allowed_symbols=universe_allowed_symbols,
+    )
 else:
     daily_open, daily_high, daily_low, daily_close = cached_load_daily_ohlc()
     with st.spinner("Running swing backtest (daily scan across the full history)..."):
@@ -414,7 +509,8 @@ if trades.empty or equity.empty:
     st.warning(
         "No trades were generated with these parameters -- try a lower gap threshold, a "
         "shorter Donchian lookback, a larger universe, (for the EMA/Short Momentum strategies) "
-        "a shorter fast/slow EMA span, or (for ORB) a shorter opening range."
+        "a shorter fast/slow EMA span, (for ORB) a shorter opening range, or (for RSI Reversal) "
+        "a higher RSI threshold or a longer timeframe (15/30-min only have a ~60 day window)."
     )
     st.stop()
 
@@ -591,6 +687,17 @@ elif is_short:
         "risk-based. Modeled as directly shorting the stock at its spot price -- economically "
         "close to a fully-margined stock future, but ignoring real futures mechanics (lot sizes, "
         "margin, rollover, futures-spot basis). Costs, taxes, and slippage are not modeled here yet."
+    )
+elif is_rsi:
+    st.caption(
+        f"Universe recomputed at {result['n_universe_periods']} monthly rebalance points using the "
+        "same ranking formula as the Backtest page (compute_momentum_ranking). Position sizing is "
+        "risk-based (see sidebar), capped by the max-position-size setting and by available cash "
+        "-- a trade whose implied stop exceeds the max-stop-% setting is skipped entirely, never "
+        "taken with a larger-than-intended risk. Target and stop are both FIXED at entry (the "
+        "target doesn't trail); the time exit closes anything neither has caught within the "
+        "configured number of calendar days. Idle cash between trades earns 0% (a "
+        "simplification). Costs, taxes, and slippage are not modeled here yet."
     )
 else:
     st.caption(

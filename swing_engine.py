@@ -1119,3 +1119,252 @@ def run_orb_backtest(
         "n_universe_periods": len(universe_by_period),
         "capital_base": capital_base,
     }
+
+
+def run_rsi_reversal_backtest(
+    monthly_prices: pd.DataFrame,
+    membership: pd.DataFrame | None,
+    bar_open: pd.DataFrame,
+    bar_high: pd.DataFrame,
+    bar_low: pd.DataFrame,
+    bar_close: pd.DataFrame,
+    lookback_months: int,
+    skip_months: int,
+    n_stocks: int,
+    min_price: float,
+    rsi_period: int = 14,
+    rsi_threshold: float = 31.0,
+    target_multiple: float = 5.0,
+    max_hold_days: int = 45,
+    max_stop_pct: float = 4.0,
+    min_stop_pct: float = 0.1,
+    risk_pct: float = 1.0,
+    max_position_pct: float = 20.0,
+    capital_base: float = 1_000_000.0,
+    allowed_symbols: set[str] | None = None,
+) -> dict:
+    """RSI Oversold Reversal, long only, top-N Nifty 500 momentum universe
+    (same as run_ema_crossover_backtest). Timeframe-agnostic -- pass 15m,
+    30m, or hourly bars via bar_open/bar_high/bar_low/bar_close (see
+    pages/3_Swing_Trading.py, which offers all three; 15m/30m are capped
+    at Yahoo Finance's ~60-day trailing window for sub-hourly intervals,
+    much shorter than hourly's ~2-3yr, so treat those as a short recent
+    sample, not a real multi-year backtest).
+
+    RSI: Wilder's smoothing (span=rsi_period EWM on gains/losses, the
+    standard convention), computed independently per symbol on bar_close.
+
+    Alert candle: the bar where RSI closes above rsi_threshold having
+    closed below it the PREVIOUS bar (a fresh upward cross, not "RSI is
+    currently above threshold"). Only one alert is tracked per symbol at
+    a time -- a later RSI cross replaces an earlier, still-untriggered
+    alert (the most recent signal is the relevant one), and an alert is
+    consumed (cleared) the moment a bar's close exceeds its high,
+    whether or not the resulting trade actually fills (see max_stop_pct
+    below) -- it doesn't keep re-arming on every later bar.
+
+    Entry: a bar's CLOSE above the ACTIVE alert candle's high, for a
+    universe stock not currently held. Executed at the NEXT bar's open,
+    the same lookahead-avoidance lag as every other bar-based strategy
+    in this module.
+
+    Stop: CLOSE below the alert candle's low (fixed for the life of the
+    trade -- unlike run_ema_crossover_backtest's trailing ema_slow stop,
+    this one doesn't move). Target: CLOSE at or above entry +
+    target_multiple x (entry - stop) -- also fixed, an R-multiple of the
+    original risk. Time exit: neither has fired within max_hold_days
+    CALENDAR days of entry. All three checked every bar, all executed at
+    the next bar's open; if more than one condition is true on the same
+    bar, a price-based exit (stop or target) takes priority over the
+    passive time exit.
+
+    max_stop_pct: at FILL time (using the actual next-bar open, not the
+    alert candle's own close), if the stop distance as a % of that fill
+    price would exceed max_stop_pct, the trade is skipped entirely --
+    "do not take the trade if stoploss is above 4%". min_stop_pct is the
+    same near-zero-risk floor added to run_ema_crossover_backtest (see
+    its docstring) for sizing/r_multiple purposes only; it rarely binds
+    here since max_stop_pct already caps the top end and a real candle's
+    high-low range is rarely near-zero the way a moving average
+    coinciding with price can be.
+
+    Position sizing: identical convention to run_ema_crossover_backtest
+    -- risk_pct/max_position_pct/cash-capped qty, plus the same guard
+    against opening a economically negligible (<0.1% of capital)
+    position when cash is nearly exhausted by other concurrent
+    positions (no cap on concurrent position count here either).
+    """
+    universe_by_period = _build_universe_calendar(
+        monthly_prices, membership, lookback_months, skip_months, n_stocks, min_price,
+        allowed_symbols=allowed_symbols,
+    )
+
+    empty = {
+        "trades": pd.DataFrame(columns=["symbol", "entry_date", "entry_price", "entry_rank", "stop_price",
+                                         "target_price", "exit_date", "exit_price", "exit_reason", "qty",
+                                         "risked_rs", "pnl_rs", "pnl_pct", "r_multiple", "hold_days", "status"]),
+        "equity": pd.Series(dtype=float),
+        "n_universe_periods": 0,
+        "capital_base": capital_base,
+    }
+    if not universe_by_period:
+        return empty
+
+    rebalance_dates = pd.DatetimeIndex([u[0] for u in universe_by_period])
+    start_date = rebalance_dates[0]
+    last_bar_date = bar_close.index.max()
+    if last_bar_date <= start_date:
+        return empty
+    bars = bar_close.index[(bar_close.index > start_date) & (bar_close.index <= last_bar_date)]
+    if len(bars) == 0:
+        return empty
+
+    # Bar -> period-index mapping, normalized to each bar's own month-start
+    # before the searchsorted lookup -- see run_orb_backtest's comment on
+    # this same line for why a raw timestamp comparison is wrong (it puts
+    # the last trading day of each month into the NEXT month's universe).
+    bar_month_starts = pd.DatetimeIndex([b.replace(day=1, hour=0, minute=0, second=0) for b in bars])
+    ridx_of_bar = dict(zip(bars, rebalance_dates.searchsorted(bar_month_starts, side="right") - 1))
+
+    delta = bar_close.diff()
+    gain = delta.clip(lower=0)
+    loss = (-delta).clip(lower=0)
+    avg_gain = gain.ewm(alpha=1.0 / rsi_period, adjust=False, min_periods=rsi_period).mean()
+    avg_loss = loss.ewm(alpha=1.0 / rsi_period, adjust=False, min_periods=rsi_period).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100 - 100 / (1 + rs)
+    rsi = rsi.where(avg_loss > 0, 100.0)  # no losses in the window -> RSI = 100, not NaN from a 0/0 rs
+    alert_signal = (rsi >= rsi_threshold) & (rsi.shift(1) < rsi_threshold)
+
+    notional_risk_amount = capital_base * risk_pct / 100.0
+    max_position_value = capital_base * max_position_pct / 100.0
+
+    cash = capital_base
+    positions: dict[str, dict] = {}
+    trades: list[dict] = []
+    equity_series = pd.Series(index=bars, dtype=float)
+    alert_by_symbol: dict[str, tuple[float, float]] = {}  # symbol -> (alert_high, alert_low)
+    pending_entries: dict[str, tuple[float, float, int]] = {}  # symbol -> (alert_high, alert_low, rank)
+    pending_exits: dict[str, str] = {}  # symbol -> exit_reason
+
+    for bar in bars:
+        ridx = ridx_of_bar[bar]
+        universe = universe_by_period[ridx][1] if ridx >= 0 else []
+        rank_of = {sym: i + 1 for i, sym in enumerate(universe)}
+
+        # --- execute signals queued from the PREVIOUS bar, at THIS bar's open ---
+        for sym in list(pending_exits.keys()):
+            reason = pending_exits.pop(sym)
+            if sym not in positions or sym not in bar_open.columns or bar not in bar_open.index:
+                continue
+            open_px = bar_open.at[bar, sym]
+            if pd.isna(open_px) or open_px <= 0:
+                continue
+            pos = positions.pop(sym)
+            qty = pos["qty"]
+            cash += qty * open_px
+            pnl_rs = qty * (open_px - pos["entry_price"])
+            trades.append({
+                "symbol": sym, "entry_date": pos["entry_date"], "entry_price": pos["entry_price"],
+                "entry_rank": pos["entry_rank"], "stop_price": pos["stop_price"],
+                "target_price": pos["target_price"], "exit_date": bar, "exit_price": open_px,
+                "exit_reason": reason, "qty": qty, "risked_rs": pos["risked_rs"],
+                "pnl_rs": pnl_rs, "pnl_pct": open_px / pos["entry_price"] - 1,
+                "r_multiple": pnl_rs / pos["risked_rs"] if pos["risked_rs"] > 0 else np.nan,
+                "hold_days": (bar - pos["entry_date"]).days, "status": "closed",
+            })
+
+        for sym in list(pending_entries.keys()):
+            alert_high, alert_low, entry_rank = pending_entries.pop(sym)
+            if sym in positions:
+                continue
+            if sym not in bar_open.columns or bar not in bar_open.index:
+                continue
+            open_px = bar_open.at[bar, sym]
+            if pd.isna(open_px) or open_px <= 0 or alert_low >= open_px:
+                continue
+            raw_risk = open_px - alert_low
+            stop_pct_actual = raw_risk / open_px * 100.0
+            if stop_pct_actual > max_stop_pct:
+                continue
+            risk_per_share = max(raw_risk, open_px * min_stop_pct / 100.0)
+            qty = min(notional_risk_amount / risk_per_share, max_position_value / open_px, cash / open_px)
+            if qty * open_px < capital_base * 0.001:
+                continue
+            cash -= qty * open_px
+            positions[sym] = {
+                "entry_date": bar, "entry_price": open_px, "qty": qty,
+                "stop_price": alert_low, "target_price": open_px + target_multiple * risk_per_share,
+                "risked_rs": qty * risk_per_share, "entry_rank": entry_rank,
+            }
+
+        # --- evaluate THIS bar's close for new signals, queued for next bar ---
+        for sym in list(positions.keys()):
+            if sym in pending_exits or sym not in bar_close.columns or bar not in bar_close.index:
+                continue
+            c = bar_close.at[bar, sym]
+            if pd.isna(c):
+                continue
+            pos = positions[sym]
+            if c < pos["stop_price"]:
+                pending_exits[sym] = "stoploss"
+            elif c >= pos["target_price"]:
+                pending_exits[sym] = "target"
+            elif (bar - pos["entry_date"]).days >= max_hold_days:
+                pending_exits[sym] = "time_exit"
+
+        for sym in universe:
+            if sym in positions or sym in pending_entries:
+                continue
+            if sym not in bar_close.columns or bar not in bar_close.index:
+                continue
+            c = bar_close.at[bar, sym]
+            if pd.isna(c):
+                continue
+            active_alert = alert_by_symbol.get(sym)
+            if active_alert is not None:
+                alert_high, alert_low = active_alert
+                if c > alert_high:
+                    pending_entries[sym] = (alert_high, alert_low, rank_of[sym])
+                    del alert_by_symbol[sym]
+            if bar in alert_signal.index and sym in alert_signal.columns and bool(alert_signal.at[bar, sym]):
+                h = bar_high.at[bar, sym] if sym in bar_high.columns else np.nan
+                l = bar_low.at[bar, sym] if sym in bar_low.columns else np.nan
+                if pd.notna(h) and pd.notna(l):
+                    alert_by_symbol[sym] = (h, l)
+
+        # --- mark to market ---
+        mtm = cash
+        for sym, pos in positions.items():
+            px = bar_close.at[bar, sym] if sym in bar_close.columns and bar in bar_close.index else np.nan
+            px = px if pd.notna(px) else pos["entry_price"]
+            mtm += pos["qty"] * px
+        equity_series.at[bar] = mtm
+
+    # still-open positions at the very end of available data -> unrealized
+    for sym, pos in positions.items():
+        px = bar_close.at[bars[-1], sym] if sym in bar_close.columns else np.nan
+        if pd.isna(px):
+            continue
+        qty = pos["qty"]
+        pnl_rs = qty * (px - pos["entry_price"])
+        trades.append({
+            "symbol": sym, "entry_date": pos["entry_date"], "entry_price": pos["entry_price"],
+            "entry_rank": pos["entry_rank"], "stop_price": pos["stop_price"],
+            "target_price": pos["target_price"], "exit_date": pd.NaT, "exit_price": px,
+            "exit_reason": "open", "qty": qty, "risked_rs": pos["risked_rs"],
+            "pnl_rs": pnl_rs, "pnl_pct": px / pos["entry_price"] - 1,
+            "r_multiple": pnl_rs / pos["risked_rs"] if pos["risked_rs"] > 0 else np.nan,
+            "hold_days": (bars[-1] - pos["entry_date"]).days, "status": "open",
+        })
+
+    trades_df = pd.DataFrame(trades)
+    if not trades_df.empty:
+        trades_df = trades_df.sort_values("entry_date").reset_index(drop=True)
+
+    return {
+        "trades": trades_df,
+        "equity": equity_series,
+        "n_universe_periods": len(universe_by_period),
+        "capital_base": capital_base,
+    }
