@@ -21,6 +21,7 @@ from backtest_engine import (
     load_liquid_series,
     load_membership_matrix,
     load_prices,
+    load_universe_symbols,
 )
 from ema_rs_rotation_engine import load_data as load_ema_rs_data
 
@@ -83,6 +84,11 @@ def cached_load_2h_ohlc() -> tuple[pd.DataFrame, pd.DataFrame]:
 @st.cache_data(show_spinner="Loading F&O eligible stock list...")
 def cached_load_fno_symbols() -> set[str]:
     return load_fno_symbols()
+
+
+@st.cache_data(show_spinner="Loading universe constituent list...")
+def cached_load_universe_symbols(name: str) -> set[str]:
+    return load_universe_symbols(name)
 
 
 @st.cache_data(show_spinner="Loading price history for correction-triggered lumpsum...")

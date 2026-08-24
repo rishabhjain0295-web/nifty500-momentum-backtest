@@ -345,6 +345,38 @@ def load_fno_symbols() -> set[str]:
     return set(pd.read_csv(f)["Symbol"])
 
 
+# The "Universe" selector offered above stock selection on every page (see
+# scripts/get_nse_universes.py). "Nifty 500 (point-in-time)" isn't in this
+# dict -- it's the app's existing default (no allowed_symbols restriction at
+# all, just the point-in-time membership calendar already in use), kept that
+# way specifically so picking it is a no-op rather than swapping the
+# survivorship-bias-aware historical universe for a current-only snapshot.
+# Every OTHER entry here IS a current snapshot (NSE doesn't publish
+# historical inclusion/exclusion logs for these the way it does for the
+# (Nifty) 500), so selecting one applies that current list across all
+# history -- same simplification as load_fno_symbols above.
+NSE_UNIVERSES: dict[str, str] = {
+    "Nifty 50": "nifty50",
+    "Nifty Next 50": "niftynext50",
+    "Nifty Midcap Select": "niftymidcapselect",
+    "Nifty 100": "nifty100",
+    "Nifty 200": "nifty200",
+    "Nifty 500": "nifty500",
+    "Nifty Total Market": "niftytotalmarket",
+    "Nifty Microcap 250": "niftymicrocap250",
+    "Nifty Smallcap 250": "niftysmallcap250",
+    "Nifty Alpha 50": "niftyalpha50",
+}
+
+
+def load_universe_symbols(name: str) -> set[str]:
+    """Current constituent symbols for one of NSE_UNIVERSES, from
+    data/universes/<key>.csv (see scripts/get_nse_universes.py)."""
+    key = NSE_UNIVERSES[name]
+    f = ROOT / "data" / "universes" / f"{key}.csv"
+    return set(pd.read_csv(f)["Symbol"])
+
+
 def compute_momentum_ranking(
     monthly_prices: pd.DataFrame,
     membership: pd.DataFrame | None,
@@ -352,6 +384,7 @@ def compute_momentum_ranking(
     lookback_months: int,
     skip_months: int,
     min_price: float,
+    allowed_symbols: set[str] | None = None,
 ) -> pd.Series | None:
     """Trailing lookback_months return (skipping the most recent skip_months)
     for every stock eligible as of as_of_date, sorted descending (first
@@ -359,11 +392,17 @@ def compute_momentum_ranking(
     monthly_prices or doesn't have enough trailing history.
 
     Eligibility: valid (>0) price at both the lookback start and end, last
-    price >= min_price, and -- if membership is given -- an actual Nifty
-    500 constituent as of as_of_date per the point-in-time calendar. This
-    is the single source of truth for the ranking formula, shared by
-    run_backtest (historical simulation) and the live stock ranker
-    (pages/1_Stock_Ranker.py, current snapshot).
+    price >= min_price, -- if membership is given -- an actual Nifty 500
+    constituent as of as_of_date per the point-in-time calendar, and -- if
+    allowed_symbols is given -- a member of that set. allowed_symbols is
+    the "Universe" selector (see NSE_UNIVERSES / load_universe_symbols): a
+    CURRENT snapshot of some other NSE index (Nifty 50, Smallcap 250,
+    etc.), not a point-in-time history like membership -- NSE doesn't
+    publish historical inclusion/exclusion logs for these the way it does
+    for the (Nifty) 500. This is the single source of truth for the
+    ranking formula, shared by run_backtest (historical simulation), the
+    live stock ranker (pages/1_Stock_Ranker.py, current snapshot), and
+    swing_engine.py's strategies.
     """
     dates = monthly_prices.index
     if as_of_date not in dates:
@@ -381,6 +420,8 @@ def compute_momentum_ranking(
     eligible = (px_start > 0) & (px_end > 0) & (last_price >= min_price)
     if membership is not None:
         eligible &= membership.loc[as_of_date]
+    if allowed_symbols is not None:
+        eligible &= eligible.index.isin(allowed_symbols)
     mom = (px_end / px_start - 1.0)[eligible].dropna()
     return mom.sort_values(ascending=False)
 
@@ -418,8 +459,13 @@ def run_backtest(
     gold_entry_lookback: int = 150,
     gold_exit_lookback: int = 55,
     weighting_mode: str = "equal_monthly",
+    allowed_symbols: set[str] | None = None,
 ) -> tuple[pd.Series, list[tuple[pd.Timestamp, list[str]]]]:
     """Returns (monthly portfolio returns, [(rebalance_date, holdings), ...]).
+
+    allowed_symbols, if given, is the "Universe" selector -- see
+    compute_momentum_ranking's docstring (a CURRENT snapshot of some other
+    NSE index, applied on top of whatever membership already restricts).
 
     Entries are always drawn from the top n_stocks by momentum rank. Exits
     normally happen as soon as a held stock's rank drops out of the top
@@ -528,7 +574,9 @@ def run_backtest(
             months_held = 0
             continue
 
-        ranked = compute_momentum_ranking(monthly_prices, membership, today, lookback_months, skip_months, min_price)
+        ranked = compute_momentum_ranking(
+            monthly_prices, membership, today, lookback_months, skip_months, min_price, allowed_symbols
+        )
         if ranked is None or len(ranked) < n_stocks:
             continue
 

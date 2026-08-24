@@ -11,13 +11,14 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from backtest_engine import apply_execution_lag, ensure_stock_data, run_backtest
+from backtest_engine import NSE_UNIVERSES, apply_execution_lag, ensure_stock_data, run_backtest
 from sip_engine import simulate_dynamic_sip, simulate_lumpsum_on_drawdown, simulate_plain_sip
 from streamlit_cache import (
     cached_load_daily_prices,
     cached_load_liquid,
     cached_load_membership,
     cached_load_prices,
+    cached_load_universe_symbols,
 )
 
 st.set_page_config(page_title="Nifty 500 SIP Simulator", layout="wide")
@@ -35,6 +36,20 @@ st.caption(
 )
 
 with st.sidebar:
+    st.header("Universe")
+    universe_options = list(NSE_UNIVERSES.keys())
+    universe_label = st.selectbox(
+        "Universe", universe_options, index=universe_options.index("Nifty 500"),
+        help="Restricts stock selection to one NSE index's CURRENT constituents (a snapshot, "
+             "not point-in-time -- NSE doesn't publish historical inclusion/exclusion logs for "
+             "these indices the way it does for the Nifty 500). Nifty 500 uses the point-in-time "
+             "membership calendar below instead when that toggle is on, so picking it here "
+             "doesn't restrict anything further."
+    )
+    allowed_symbols = cached_load_universe_symbols(universe_label) if universe_label != "Nifty 500" else None
+    if allowed_symbols is not None:
+        st.caption(f"Restricted to the current {len(allowed_symbols)} constituents of {universe_label}.")
+
     st.header("Strategy parameters")
     n_stocks = st.slider("Number of stocks held", min_value=5, max_value=100, value=10, step=5)
     hold_months = st.slider("Rebalancing period (months)", min_value=1, max_value=12, value=1, step=1)
@@ -123,6 +138,7 @@ liquid_px = cached_load_liquid(price_col)
 strat_rets, holdings_history = run_backtest(
     monthly_prices, membership, lookback_months, skip_months, hold_months, n_stocks, min_price,
     use_exit_band, exit_band_pct,
+    allowed_symbols=allowed_symbols,
 )
 
 if use_execution_lag and len(strat_rets) > 0:

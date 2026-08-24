@@ -23,6 +23,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from backtest_engine import (
+    NSE_UNIVERSES,
     apply_execution_lag,
     apply_stoploss,
     build_trade_log,
@@ -37,6 +38,7 @@ from streamlit_cache import (
     cached_load_gold,
     cached_load_membership,
     cached_load_prices,
+    cached_load_universe_symbols,
 )
 from tax_cost_engine import CostParams, TaxParams, simulate_costs_and_taxes
 
@@ -61,6 +63,25 @@ st.caption(
 )
 
 with st.sidebar:
+    st.header("Universe")
+    universe_options = list(NSE_UNIVERSES.keys())
+    universe_label = st.selectbox(
+        "Universe", universe_options, index=universe_options.index("Nifty 500"),
+        help="Restricts stock selection to one NSE index's CURRENT constituents (a snapshot, "
+             "not point-in-time -- NSE doesn't publish historical inclusion/exclusion logs for "
+             "these indices the way it does for the Nifty 500). Nifty 500 uses the point-in-time "
+             "membership calendar below instead when that toggle is on, so picking it here "
+             "doesn't restrict anything further."
+    )
+    allowed_symbols = cached_load_universe_symbols(universe_label) if universe_label != "Nifty 500" else None
+    if allowed_symbols is not None:
+        st.caption(
+            f"Restricted to the current {len(allowed_symbols)} constituents of {universe_label}. "
+            "If this universe includes stocks outside the Nifty 500 (e.g. Microcap 250), turn "
+            "off 'Enforce point-in-time index membership' below, or they'll also need to have "
+            "been a Nifty 500 constituent at each rebalance date to be picked."
+        )
+
     st.header("Strategy parameters")
     n_stocks = st.slider("Number of stocks held", min_value=5, max_value=100, value=30, step=5)
 
@@ -262,7 +283,7 @@ strat_rets, holdings_history = run_backtest(
     monthly_prices, membership, lookback_months, skip_months, hold_months, n_stocks, min_price,
     use_exit_band, exit_band_pct,
     use_regime_filter, bench_px, gold_px, gold_entry_lookback, gold_exit_lookback,
-    weighting_mode,
+    weighting_mode, allowed_symbols,
 )
 
 if use_stoploss or use_execution_lag:
@@ -356,8 +377,9 @@ if post_tax_stats is not None:
 if len(strat_rets) == 0:
     st.warning(
         f"No {period_word}s produced a valid portfolio -- likely `Number of stocks held` is "
-        "larger than the number of eligible stocks available early in the sample. Try lowering "
-        "it or shortening the lookback."
+        "larger than the number of eligible stocks available early in the sample (a smaller "
+        "Universe like Nifty 50 or Alpha 50 makes this more likely). Try lowering it, shortening "
+        "the lookback, or picking a larger Universe."
     )
 else:
     st.subheader("Equity curve")

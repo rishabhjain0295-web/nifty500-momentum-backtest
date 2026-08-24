@@ -127,10 +127,12 @@ def run_swing_backtest(
     risk_reward_ratio: float = 2.0,
     max_position_pct: float = 20.0,
     capital_base: float = 1_000_000.0,
+    allowed_symbols: set[str] | None = None,
 ) -> dict:
     # 1. universe calendar: top n_stocks at each monthly rebalance
     universe_by_period = _build_universe_calendar(
-        monthly_prices, membership, lookback_months, skip_months, n_stocks, min_price
+        monthly_prices, membership, lookback_months, skip_months, n_stocks, min_price,
+        allowed_symbols=allowed_symbols,
     )
 
     empty = {
@@ -313,6 +315,7 @@ def run_ema_crossover_backtest(
     max_position_pct: float = 20.0,
     min_stop_pct: float = 1.0,
     capital_base: float = 1_000_000.0,
+    allowed_symbols: set[str] | None = None,
 ) -> dict:
     """EMA(ema_fast)/EMA(ema_slow) crossover swing strategy. Timeframe-
     agnostic -- pass daily bars or hourly bars via bar_open/bar_close and
@@ -363,7 +366,8 @@ def run_ema_crossover_backtest(
     ordinary trade, purely from dividing by a near-zero denominator.
     """
     universe_by_period = _build_universe_calendar(
-        monthly_prices, membership, lookback_months, skip_months, n_stocks, min_price
+        monthly_prices, membership, lookback_months, skip_months, n_stocks, min_price,
+        allowed_symbols=allowed_symbols,
     )
 
     empty = {
@@ -531,6 +535,7 @@ def run_short_ema_crossover_backtest(
     capital_base: float = 2_000_000.0,
     use_target: bool = False,
     risk_reward_ratio: float = 2.0,
+    allowed_symbols: set[str] | None = None,
 ) -> dict:
     """Short Momentum (F&O): the mirror image of run_ema_crossover_backtest,
     short-selling the WEAKEST momentum stocks within the F&O-eligible
@@ -542,9 +547,12 @@ def run_short_ema_crossover_backtest(
     return stocks among fno_symbols (real shorting of individual equities
     isn't allowed in the Indian cash market -- this is only viable via
     stock futures, hence restricting to F&O-eligible names; see
-    get_fno_list.py). Reuses _build_universe_calendar(weakest=True,
-    allowed_symbols=fno_symbols) so this can't drift out of sync with the
-    long strategy's ranking formula.
+    get_fno_list.py) -- further intersected with allowed_symbols if given
+    (the page's "Universe" selector, e.g. Nifty Smallcap 250; fno_symbols
+    stays a hard floor regardless, since shorting individual equities
+    isn't optional-out-of). Reuses _build_universe_calendar(weakest=True)
+    so this can't drift out of sync with the long strategy's ranking
+    formula.
 
     Entry: at the close of any bar where ema_fast < ema_slow, for a
     universe stock not currently shorted and while fewer than max_entries
@@ -607,9 +615,10 @@ def run_short_ema_crossover_backtest(
     spot basis). No slippage or costs modeled, consistent with the rest of
     this project's swing strategies.
     """
+    effective_allowed = fno_symbols if allowed_symbols is None else (fno_symbols & allowed_symbols)
     universe_by_period = _build_universe_calendar(
         monthly_prices, membership, lookback_months, skip_months, n_stocks, min_price,
-        allowed_symbols=fno_symbols, weakest=True,
+        allowed_symbols=effective_allowed, weakest=True,
     )
 
     empty_cols = ["symbol", "entry_date", "entry_price", "entry_rank", "stop_price"]
@@ -830,14 +839,18 @@ def run_orb_backtest(
     stop_pct: float = 8.0,
     position_pct: float = 5.0,
     capital_base: float = 1_000_000.0,
+    allowed_symbols: set[str] | None = None,
 ) -> dict:
     """Opening Range Breakout (ORB), long or short (direction="long" or
     "short"), on hourly bars. Universe: for direction="long", the TOP
     n_stocks by momentum among all eligible Nifty 500 stocks (fno_symbols
-    ignored); for direction="short", the BOTTOM n_stocks (weakest) among
-    fno_symbols only (real shorting needs stock futures -- same reasoning
-    as run_short_ema_crossover_backtest). Reuses _build_universe_calendar
-    so this can't drift out of sync with the other strategies' ranking.
+    ignored), further restricted to allowed_symbols if given (the page's
+    "Universe" selector); for direction="short", the BOTTOM n_stocks
+    (weakest) among fno_symbols intersected with allowed_symbols if given
+    -- fno_symbols stays a hard floor regardless, since shorting
+    individual equities isn't optional-out-of (same reasoning as
+    run_short_ema_crossover_backtest). Reuses _build_universe_calendar so
+    this can't drift out of sync with the other strategies' ranking.
 
     Opening range: the high/low of the first range_minutes of the 1-hour
     chart on the FIRST TRADING DAY of each month, held fixed as that
@@ -896,9 +909,13 @@ def run_orb_backtest(
     is_long = direction == "long"
     range_bars = max(1, round(range_minutes / 60))
 
+    if is_long:
+        effective_allowed = allowed_symbols
+    else:
+        effective_allowed = fno_symbols if allowed_symbols is None else (fno_symbols & allowed_symbols)
     universe_by_period = _build_universe_calendar(
         monthly_prices, membership, lookback_months, skip_months, n_stocks, min_price,
-        allowed_symbols=(None if is_long else fno_symbols), weakest=(not is_long),
+        allowed_symbols=effective_allowed, weakest=(not is_long),
     )
 
     empty = {

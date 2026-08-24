@@ -24,7 +24,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from backtest_engine import ensure_hourly_data, ensure_stock_data
+from backtest_engine import NSE_UNIVERSES, ensure_hourly_data, ensure_stock_data
 from streamlit_cache import (
     cached_load_2h_ohlc,
     cached_load_daily_ohlc,
@@ -33,6 +33,7 @@ from streamlit_cache import (
     cached_load_hourly_ohlc,
     cached_load_membership,
     cached_load_prices,
+    cached_load_universe_symbols,
 )
 from swing_engine import (
     run_ema_crossover_backtest,
@@ -74,6 +75,25 @@ with st.sidebar:
         )
         orb_direction = "long" if orb_direction_label.startswith("Long") else "short"
     is_orb_short = is_orb and orb_direction == "short"
+
+    st.header("Universe")
+    universe_options = list(NSE_UNIVERSES.keys())
+    universe_label = st.selectbox(
+        "Universe", universe_options, index=universe_options.index("Nifty 500"),
+        help="Restricts the momentum-ranking pool to one NSE index's CURRENT constituents (a "
+             "snapshot, not point-in-time -- NSE doesn't publish historical inclusion/exclusion "
+             "logs for these indices the way it does for the Nifty 500). For short-direction "
+             "strategies this is intersected with the F&O list below, never replacing it."
+    )
+    universe_allowed_symbols = (
+        cached_load_universe_symbols(universe_label) if universe_label != "Nifty 500" else None
+    )
+    if universe_allowed_symbols is not None:
+        extra = (
+            ", further intersected with the F&O list since this strategy shorts"
+            if (is_short or is_orb_short) else ""
+        )
+        st.caption(f"Restricted to the current {len(universe_allowed_symbols)} constituents of {universe_label}{extra}.")
 
     st.header("Momentum universe")
     n_stocks = st.slider(
@@ -330,7 +350,7 @@ if is_orb:
             monthly_prices, membership, bar_open, bar_high, bar_low, bar_close, fno_symbols,
             lookback_months, skip_months, n_stocks, min_price,
             orb_direction, range_minutes, max_reentries, orb_stop_mode, stop_pct,
-            position_pct, capital_base,
+            position_pct, capital_base, allowed_symbols=universe_allowed_symbols,
         )
 elif is_short:
     fno_symbols = cached_load_fno_symbols()
@@ -343,7 +363,7 @@ elif is_short:
                 monthly_prices, membership, bar_open, bar_close, fno_symbols,
                 lookback_months, skip_months, n_stocks, min_price,
                 ema_fast, ema_slow, max_entries, min_stop_pct, capital_base,
-                use_target, risk_reward_ratio,
+                use_target, risk_reward_ratio, allowed_symbols=universe_allowed_symbols,
             )
     else:
         with st.spinner("Running Short Momentum backtest (hourly bars, ~2-3 year window)..."):
@@ -352,7 +372,7 @@ elif is_short:
                 monthly_prices, membership, bar_open, bar_close, fno_symbols,
                 lookback_months, skip_months, n_stocks, min_price,
                 ema_fast, ema_slow, max_entries, min_stop_pct, capital_base,
-                use_target, risk_reward_ratio,
+                use_target, risk_reward_ratio, allowed_symbols=universe_allowed_symbols,
             )
 elif is_ema:
     if timeframe.startswith("Hourly"):
@@ -364,6 +384,7 @@ elif is_ema:
                 monthly_prices, membership, bar_open, bar_close,
                 lookback_months, skip_months, n_stocks, min_price,
                 ema_fast, ema_slow, risk_pct, max_position_pct, min_stop_pct, capital_base,
+                allowed_symbols=universe_allowed_symbols,
             )
     else:
         with st.spinner("Running EMA crossover backtest (daily bars, full history)..."):
@@ -372,6 +393,7 @@ elif is_ema:
                 monthly_prices, membership, daily_open, daily_close,
                 lookback_months, skip_months, n_stocks, min_price,
                 ema_fast, ema_slow, risk_pct, max_position_pct, min_stop_pct, capital_base,
+                allowed_symbols=universe_allowed_symbols,
             )
 else:
     daily_open, daily_high, daily_low, daily_close = cached_load_daily_ohlc()
@@ -382,6 +404,7 @@ else:
             entry_strategy, gap_pct, donchian_entry_lookback,
             exit_mode, exit_lookback_days, stop_pct,
             risk_pct, risk_reward_ratio, max_position_pct, capital_base,
+            allowed_symbols=universe_allowed_symbols,
         )
 
 trades = result["trades"]

@@ -9,8 +9,8 @@ current rank against a custom exit threshold.
 import pandas as pd
 import streamlit as st
 
-from backtest_engine import compute_momentum_ranking, ensure_stock_data
-from streamlit_cache import cached_load_current_universe, cached_load_prices
+from backtest_engine import NSE_UNIVERSES, compute_momentum_ranking, ensure_stock_data
+from streamlit_cache import cached_load_current_universe, cached_load_prices, cached_load_universe_symbols
 
 st.set_page_config(page_title="Nifty 500 Stock Ranker", layout="wide")
 
@@ -26,6 +26,22 @@ st.caption(
 )
 
 with st.sidebar:
+    st.header("Universe")
+    universe_options = list(NSE_UNIVERSES.keys()) + ["All ~970 symbols (no restriction)"]
+    universe_label = st.selectbox(
+        "Universe", universe_options, index=universe_options.index("Nifty 500"),
+        help="Restricts ranking to one NSE index's CURRENT constituents. 'All ~970 symbols' "
+             "ranks every symbol in the dataset, including historical/delisted names kept for "
+             "backtesting -- not investable, shown for reference only."
+    )
+    allowed_symbols = None if universe_label.startswith("All") else cached_load_universe_symbols(universe_label)
+    if allowed_symbols is not None:
+        st.caption(
+            f"Restricted to the current {len(allowed_symbols)} constituents of {universe_label}. "
+            "Company name/industry lookup below is still keyed off the Nifty 500 list, so a "
+            "stock outside it (e.g. from Microcap 250) shows '-' for those two columns."
+        )
+
     st.header("Ranking parameters")
     lookback_months = st.slider("Trailing return lookback (months)", min_value=1, max_value=24, value=10, step=1)
     skip_months = st.slider(
@@ -41,32 +57,42 @@ with st.sidebar:
              "matches a custom exit rule like 'exit when rank drops below 18'. Beyond this "
              "rank, a stock is firmly out."
     )
-    use_current_universe = st.checkbox(
-        "Restrict to current Nifty 500 only", value=True,
-        help="On (recommended): only ranks today's actual Nifty 500 constituents. Off: ranks "
-             "all ~970 symbols in the dataset, including historical/delisted names kept for "
-             "backtesting -- not investable, shown for reference only."
-    )
-
 monthly_prices = cached_load_prices(price_col)
 as_of_date = monthly_prices.index.max()
 
 universe_df = cached_load_current_universe()
-current_symbols = set(universe_df["Symbol"])
 name_by_symbol = dict(zip(universe_df["Symbol"], universe_df["Company Name"]))
 industry_by_symbol = (
     dict(zip(universe_df["Symbol"], universe_df["Industry"])) if "Industry" in universe_df.columns else {}
 )
 
-if use_current_universe:
-    eligible_cols = [c for c in monthly_prices.columns if c in current_symbols]
-    ranking_input = monthly_prices[eligible_cols]
-else:
-    ranking_input = monthly_prices
-
-ranked = compute_momentum_ranking(ranking_input, None, as_of_date, lookback_months, skip_months, min_price)
+ranked = compute_momentum_ranking(
+    monthly_prices, None, as_of_date, lookback_months, skip_months, min_price, allowed_symbols
+)
+used_fallback_date = False
+if (ranked is None or ranked.empty) and len(monthly_prices.index) > 1:
+    # The very latest month-end can have sparse data if only some symbols'
+    # price files have been refreshed since the calendar rolled over (each
+    # symbol is downloaded independently, not all on the same schedule) --
+    # fall back to the most recent earlier month that actually has enough
+    # coverage for the selected Universe, rather than showing a blank page.
+    for fallback_date in reversed(monthly_prices.index[:-1][-3:]):
+        candidate = compute_momentum_ranking(
+            monthly_prices, None, fallback_date, lookback_months, skip_months, min_price, allowed_symbols
+        )
+        if candidate is not None and not candidate.empty:
+            as_of_date = fallback_date
+            ranked = candidate
+            used_fallback_date = True
+            break
 
 st.subheader(f"Ranking as of {as_of_date.date()}")
+if used_fallback_date:
+    st.caption(
+        "Note: the latest month-end in the dataset didn't have enough price data yet for this "
+        "Universe (symbols are refreshed on independent schedules) -- fell back to the most "
+        "recent month-end that did."
+    )
 st.caption(
     "This is the latest COMPLETE month-end in the downloaded data -- matches what your next "
     "scheduled month-end rebalance would use. Re-run the data download scripts to refresh."
