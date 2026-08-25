@@ -1,0 +1,38 @@
+name: Weekly Nifty 500 data refresh
+
+on:
+  schedule:
+    # Saturday 08:00 IST = 02:30 UTC -- after Friday's market close, well
+    # before the weekend. Runners can lag a few minutes at busy times.
+    - cron: "30 2 * * 6"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Bootstrap existing stock data (data/stocks/ isn't in git)
+        run: python -c "from backtest_engine import ensure_stock_data; ensure_stock_data()"
+
+      - name: Configure git identity for the data/universes + F&O list commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Run weekly refresh (top up prices, refresh universe/F&O lists, re-upload stocks.zip, commit + push)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/refresh_weekly_data.py

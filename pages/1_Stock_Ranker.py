@@ -3,8 +3,15 @@ Live Nifty 500 momentum ranker: ranks all CURRENT Nifty 500 constituents by
 trailing return, using the exact same formula as the backtest engine
 (compute_momentum_ranking in backtest_engine.py) -- shows what the momentum
 backtest's next scheduled rebalance would pick, as of the latest complete
-month-end in the downloaded data, and lets you check an existing holding's
+period in the downloaded data, and lets you check an existing holding's
 current rank against a custom exit threshold.
+
+Rebalancing frequency (Monthly/Weekly) mirrors the Backtest page's option
+of the same name -- Weekly re-derives the ranking on a weekly price grid
+(lookback/skip in weeks, not months), it isn't just a relabeled monthly
+view. See app.py's module docstring for why this needs a different price
+series (backtest_engine.load_prices' freq param), not just a different
+"as of" date.
 """
 import pandas as pd
 import streamlit as st
@@ -43,11 +50,30 @@ with st.sidebar:
         )
 
     st.header("Ranking parameters")
-    lookback_months = st.slider("Trailing return lookback (months)", min_value=1, max_value=24, value=10, step=1)
-    skip_months = st.slider(
-        "Skip period (months)", min_value=0, max_value=3, value=1, step=1,
-        help="Excludes the most recent N months from the lookback, to avoid short-term reversal effects."
+    rebal_freq_label = st.radio(
+        "Rebalancing frequency", ["Monthly", "Weekly"], index=0,
+        help="Weekly re-derives the ranking on a weekly price grid (lookback/skip in weeks, "
+             "not months) and shows the ranking as of the latest complete WEEK instead of month."
     )
+    is_weekly = rebal_freq_label == "Weekly"
+    period_word = "week" if is_weekly else "month"
+    price_freq = "W-FRI" if is_weekly else "ME"
+
+    if is_weekly:
+        lookback_months = st.slider(
+            "Trailing return lookback (weeks)", min_value=4, max_value=104, value=52, step=1,
+            help="52 weeks is the weekly equivalent of the monthly mode's 12-month default."
+        )
+        skip_months = st.slider(
+            "Skip period (weeks)", min_value=0, max_value=12, value=4, step=1,
+            help="Excludes the most recent N weeks from the lookback, to avoid short-term reversal effects."
+        )
+    else:
+        lookback_months = st.slider("Trailing return lookback (months)", min_value=1, max_value=24, value=10, step=1)
+        skip_months = st.slider(
+            "Skip period (months)", min_value=0, max_value=3, value=1, step=1,
+            help="Excludes the most recent N months from the lookback, to avoid short-term reversal effects."
+        )
     min_price = st.number_input("Minimum price filter (Rs)", min_value=0.0, value=10.0, step=5.0)
     price_col = st.selectbox("Price field", ["Adj Close", "Close"], index=0)
     top_n = st.number_input("Highlight top N (buy zone)", min_value=1, max_value=100, value=10, step=1)
@@ -57,7 +83,7 @@ with st.sidebar:
              "matches a custom exit rule like 'exit when rank drops below 18'. Beyond this "
              "rank, a stock is firmly out."
     )
-monthly_prices = cached_load_prices(price_col)
+monthly_prices = cached_load_prices(price_col, price_freq)
 as_of_date = monthly_prices.index.max()
 
 universe_df = cached_load_current_universe()
@@ -71,10 +97,10 @@ ranked = compute_momentum_ranking(
 )
 used_fallback_date = False
 if (ranked is None or ranked.empty) and len(monthly_prices.index) > 1:
-    # The very latest month-end can have sparse data if only some symbols'
+    # The very latest period can have sparse data if only some symbols'
     # price files have been refreshed since the calendar rolled over (each
     # symbol is downloaded independently, not all on the same schedule) --
-    # fall back to the most recent earlier month that actually has enough
+    # fall back to the most recent earlier period that actually has enough
     # coverage for the selected Universe, rather than showing a blank page.
     for fallback_date in reversed(monthly_prices.index[:-1][-3:]):
         candidate = compute_momentum_ranking(
@@ -89,13 +115,14 @@ if (ranked is None or ranked.empty) and len(monthly_prices.index) > 1:
 st.subheader(f"Ranking as of {as_of_date.date()}")
 if used_fallback_date:
     st.caption(
-        "Note: the latest month-end in the dataset didn't have enough price data yet for this "
-        "Universe (symbols are refreshed on independent schedules) -- fell back to the most "
-        "recent month-end that did."
+        f"Note: the latest {period_word} in the dataset didn't have enough price data yet for "
+        "this Universe (symbols are refreshed on independent schedules) -- fell back to the "
+        f"most recent {period_word} that did."
     )
 st.caption(
-    "This is the latest COMPLETE month-end in the downloaded data -- matches what your next "
-    "scheduled month-end rebalance would use. Re-run the data download scripts to refresh."
+    f"This is the latest COMPLETE {period_word} in the downloaded data -- matches what your "
+    f"next scheduled {period_word}-end rebalance would use. Source price data refreshes "
+    "automatically every Saturday morning (see the note at the bottom of the page)."
 )
 
 if ranked is None or ranked.empty:
@@ -148,8 +175,15 @@ else:
 
 st.divider()
 st.caption(
-    "Ranking formula: trailing lookback-month return, skipping the most recent skip months, "
-    "computed from month-end closes -- identical to the momentum backtest's selection rule "
+    "Ranking formula: trailing lookback-period return, skipping the most recent skip periods, "
+    "computed from period-end closes -- identical to the momentum backtest's selection rule "
     "(compute_momentum_ranking in backtest_engine.py), so this page and the backtest never "
     "drift out of sync with each other."
+)
+st.caption(
+    "Data freshness: a GitHub Actions workflow (.github/workflows/weekly-data-refresh.yml) "
+    "tops up the source price data and NSE universe/F&O lists every Saturday morning (IST) "
+    "and updates the release asset the deployed app bootstraps from. The already-running app "
+    "still needs a manual Reboot (Manage app -> Reboot app on Streamlit Cloud) to pick up a "
+    "refresh, though -- it only re-fetches source data on a fresh start, not automatically."
 )
