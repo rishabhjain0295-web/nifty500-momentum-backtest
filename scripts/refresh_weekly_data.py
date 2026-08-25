@@ -140,7 +140,7 @@ def commit_and_push():
     print("Committing data/universes/ and data/fno_stocks.csv...")
     subprocess.run(["git", "add", "data/universes", "data/fno_stocks.csv"], check=True, cwd=ROOT)
     status = subprocess.run(
-        ["git", "status", "--porcelain", "--cached"], check=True, cwd=ROOT, capture_output=True, text=True,
+        ["git", "diff", "--cached", "--name-only"], check=True, cwd=ROOT, capture_output=True, text=True,
     )
     if not status.stdout.strip():
         print("  No changes to commit.")
