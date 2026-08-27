@@ -362,6 +362,33 @@ def load_30min_upstox_full_ohlc() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFr
     )
 
 
+def load_hourly_upstox_ohlc() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Resamples load_30min_upstox_full_ohlc()'s Open/Close into hourly
+    bars, for the EMA crossover swing strategy's hourly timeframe --
+    same ~4.5 year history (back to 2022-01-01) as the 30-min data itself,
+    instead of load_hourly_ohlc's Yahoo-sourced ~2-3 year window. Same
+    day-pair grouping idea as load_2h_ohlc, but pairing 30-min bars
+    instead of hourly ones: each day's 30-min bars are paired in trading
+    order starting from that day's first bar -- (9:15,9:45), (10:15,
+    10:45), ..., (15:15 alone, no partner since the session ends at
+    15:30) -- open = the pair's first bar's open, close = the pair's
+    last bar's close, labeled with the pair's FIRST bar's timestamp so
+    the result lines up exactly with load_hourly_ohlc's own labeling
+    convention (9:15/10:15/11:15/.../15:15)."""
+    open_30, _, _, close_30 = load_30min_upstox_full_ohlc()
+    day = pd.Series(close_30.index.date, index=close_30.index)
+    pair_seq = close_30.groupby(day).cumcount() // 2
+    pair_key = day.astype(str) + "_" + pair_seq.astype(str)
+    bar_ts = pd.Series(close_30.index, index=close_30.index)
+
+    label = bar_ts.groupby(pair_key).first()
+    open_1h = open_30.groupby(pair_key).first()
+    close_1h = close_30.groupby(pair_key).last()
+    open_1h.index = label.reindex(open_1h.index).values
+    close_1h.index = label.reindex(close_1h.index).values
+    return open_1h.sort_index(), close_1h.sort_index()
+
+
 def load_benchmark(price_col: str = "Adj Close", freq: str = "ME") -> pd.Series:
     f = INDEX_DIR / "NIFTY500.csv"
     df = pd.read_csv(f, index_col=0, parse_dates=True)

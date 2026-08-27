@@ -6,7 +6,9 @@ instead of holding a rebalanced basket. Five strategy families:
     R-multiple profit target.
   - EMA 15/50 crossover, long, top-N momentum, daily or hourly bars, no
     fixed target -- see run_ema_crossover_backtest's docstring for the
-    hourly data history caveat.
+    hourly data history caveat. Hourly comes in two flavors: Yahoo
+    (~2-3 years) or Upstox-derived (~4.5 years, resampled from the same
+    30-min data as the RSI Reversal strategy below).
   - Short Momentum (F&O), short, BOTTOM-N (weakest) momentum among
     F&O-eligible stocks only, hourly or 2-hourly bars, no fixed target --
     see run_short_ema_crossover_backtest's docstring for the shorting
@@ -46,6 +48,7 @@ from streamlit_cache import (
     cached_load_fno_symbols,
     cached_load_hourly_full_ohlc,
     cached_load_hourly_ohlc,
+    cached_load_hourly_upstox_ohlc,
     cached_load_membership,
     cached_load_prices,
     cached_load_universe_symbols,
@@ -258,15 +261,26 @@ with st.sidebar:
     elif is_ema:
         st.header("EMA crossover")
         timeframe = st.radio(
-            "Timeframe", ["Daily (full history)", "Hourly (~2-3 years only)"], index=0
+            "Timeframe",
+            ["Daily (full history)", "Hourly (Yahoo, ~2-3 years)", "Hourly (Upstox, ~4.5 years)"],
+            index=0,
         )
-        if timeframe.startswith("Hourly"):
+        if timeframe.startswith("Hourly (Yahoo"):
             st.caption(
                 "Yahoo Finance only serves hourly data for roughly the trailing 2-3 years "
                 "(observed back to ~2023-09 for this project's download), unlike the daily "
                 "data which goes back to 2008. Results below will only cover that shorter, "
                 "more recent window, and only for the ~216 stocks that were actually in the "
                 "top-30 momentum universe during it."
+            )
+        elif timeframe.startswith("Hourly (Upstox"):
+            st.caption(
+                "Hourly bars built by pairing up the RSI Reversal strategy's 30-min Upstox "
+                "bars (see backtest_engine.load_hourly_upstox_ohlc) -- real history back to "
+                "2022-01-01, ~4.5 years, roughly double the Yahoo hourly option above. Same "
+                "~329-symbol universe coverage caveat as the other Upstox-sourced options: a "
+                "given month's top-N pick outside that set is silently skipped rather than "
+                "erroring."
             )
         ema_fast = st.number_input("Fast EMA span (bars)", min_value=2, max_value=100, value=15, step=1)
         ema_slow = st.number_input("Slow EMA span (bars)", min_value=5, max_value=300, value=50, step=1)
@@ -464,11 +478,22 @@ elif is_short:
                 use_target, risk_reward_ratio, allowed_symbols=universe_allowed_symbols,
             )
 elif is_ema:
-    if timeframe.startswith("Hourly"):
+    if timeframe.startswith("Hourly (Yahoo"):
         with st.spinner("Fetching hourly price data (first run only)..."):
             ensure_hourly_data()
         with st.spinner("Running EMA crossover backtest (hourly bars, ~2-3 year window)..."):
             bar_open, bar_close = cached_load_hourly_ohlc()
+            result = run_ema_crossover_backtest(
+                monthly_prices, membership, bar_open, bar_close,
+                lookback_months, skip_months, n_stocks, min_price,
+                ema_fast, ema_slow, risk_pct, max_position_pct, min_stop_pct, capital_base,
+                allowed_symbols=universe_allowed_symbols,
+            )
+    elif timeframe.startswith("Hourly (Upstox"):
+        with st.spinner("Fetching 30-minute price data (first run only)..."):
+            ensure_30min_data()
+        with st.spinner("Running EMA crossover backtest (hourly bars, ~4.5 year window)..."):
+            bar_open, bar_close = cached_load_hourly_upstox_ohlc()
             result = run_ema_crossover_backtest(
                 monthly_prices, membership, bar_open, bar_close,
                 lookback_months, skip_months, n_stocks, min_price,
