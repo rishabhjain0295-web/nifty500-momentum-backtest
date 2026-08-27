@@ -1,11 +1,13 @@
 data/stocks/
 data/hourly/
 data/15min/
+data/30min/
 data/*.zip
 data/failed_hourly_symbols.txt
 __pycache__/
 *.pyc
 .streamlit/secrets.toml
+secrets/
 download_log.txt
 download_historical_log.txt
 download_hourly_log.txt
@@ -13,3 +15,5 @@ download_fno_hourly_log.txt
 download_missing_universe_log.txt
 download_15min_log.txt
 refresh_weekly_log.txt
+download_upstox_30min_log.txt
+backfill_upstox_30min_log.txt

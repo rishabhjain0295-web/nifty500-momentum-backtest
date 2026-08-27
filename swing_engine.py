@@ -1146,10 +1146,12 @@ def run_rsi_reversal_backtest(
     """RSI Oversold Reversal, long only, top-N Nifty 500 momentum universe
     (same as run_ema_crossover_backtest). Timeframe-agnostic -- pass 15m,
     30m, or hourly bars via bar_open/bar_high/bar_low/bar_close (see
-    pages/3_Swing_Trading.py, which offers all three; 15m/30m are capped
-    at Yahoo Finance's ~60-day trailing window for sub-hourly intervals,
-    much shorter than hourly's ~2-3yr, so treat those as a short recent
-    sample, not a real multi-year backtest).
+    pages/3_Swing_Trading.py, which offers all three). 15m is capped at
+    Yahoo Finance's ~60-day trailing window for sub-hourly intervals, a
+    short recent sample rather than a real multi-year backtest; 30m
+    instead comes from Upstox's Historical Candle Data API (~4.5 years,
+    on par with hourly's ~2-3yr) since Yahoo has no longer-history option
+    at that granularity -- see backtest_engine.load_30min_upstox_full_ohlc.
 
     RSI: Wilder's smoothing (span=rsi_period EWM on gains/losses, the
     standard convention), computed independently per symbol on bar_close.

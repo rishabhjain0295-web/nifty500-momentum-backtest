@@ -10,7 +10,7 @@ import streamlit as st
 from backtest_engine import (
     load_2h_ohlc,
     load_15min_full_ohlc,
-    load_30min_full_ohlc,
+    load_30min_upstox_full_ohlc,
     load_benchmark,
     load_correction_instrument_daily,
     load_current_universe,
@@ -88,9 +88,9 @@ def cached_load_15min_full_ohlc() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFr
     return load_15min_full_ohlc()
 
 
-@st.cache_data(show_spinner="Building 30-minute bars from 15-minute price history...")
-def cached_load_30min_full_ohlc() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    return load_30min_full_ohlc()
+@st.cache_data(show_spinner="Loading 30-minute price history (Upstox, ~4.5 years)...")
+def cached_load_30min_upstox_full_ohlc() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    return load_30min_upstox_full_ohlc()
 
 
 @st.cache_data(show_spinner="Loading F&O eligible stock list...")

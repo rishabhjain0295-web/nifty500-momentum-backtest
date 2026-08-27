@@ -19,9 +19,11 @@ instead of holding a rebalanced basket. Five strategy families:
     month, re-entries allowed, forced exit at month end).
   - RSI Oversold Reversal, long, top-N momentum, 15-min/30-min/hourly
     bars, with an R-multiple target and a calendar-day time exit. See
-    run_rsi_reversal_backtest's docstring -- 15-min/30-min are capped at
-    Yahoo Finance's ~60-day trailing window, much shorter than hourly's
-    ~2-3yr.
+    run_rsi_reversal_backtest's docstring. 15-min is capped at Yahoo
+    Finance's ~60-day trailing window; 30-min instead comes from Upstox's
+    Historical Candle Data API (~4.5 years, back to 2022-01-01, on par
+    with hourly's ~2-3yr) -- see backtest_engine.load_30min_upstox_
+    full_ohlc and scripts/download_upstox_30min_data.py.
 See swing_engine.py for the full mechanics and the design assumptions
 made where the source spec was ambiguous.
 """
@@ -29,11 +31,17 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from backtest_engine import NSE_UNIVERSES, ensure_15min_data, ensure_hourly_data, ensure_stock_data
+from backtest_engine import (
+    NSE_UNIVERSES,
+    ensure_15min_data,
+    ensure_30min_data,
+    ensure_hourly_data,
+    ensure_stock_data,
+)
 from streamlit_cache import (
     cached_load_2h_ohlc,
     cached_load_15min_full_ohlc,
-    cached_load_30min_full_ohlc,
+    cached_load_30min_upstox_full_ohlc,
     cached_load_daily_ohlc,
     cached_load_fno_symbols,
     cached_load_hourly_full_ohlc,
@@ -281,10 +289,10 @@ with st.sidebar:
     elif is_rsi:
         st.header("RSI Oversold Reversal")
         timeframe = st.radio(
-            "Timeframe", ["15 Min (~60 days only)", "30 Min (~60 days only)", "1 Hour (~2-3 years)"],
+            "Timeframe", ["15 Min (~60 days only)", "30 Min (Upstox, ~4.5 years)", "1 Hour (~2-3 years)"],
             index=2,
         )
-        if timeframe.startswith(("15 Min", "30 Min")):
+        if timeframe.startswith("15 Min"):
             st.caption(
                 "Yahoo Finance caps intervals finer than 1 hour at a ~60-day trailing window -- "
                 "much shorter than the ~2-3 years available at 1 hour, let alone the ~18 years "
@@ -292,6 +300,14 @@ with st.sidebar:
                 "sample, not a real multi-year backtest -- there's rarely room for more than a "
                 "trade or two per stock to fully play out (especially with a 45-day time exit) "
                 "in a 60-day window."
+            )
+        elif timeframe.startswith("30 Min"):
+            st.caption(
+                "Sourced from Upstox's Historical Candle Data API (not Yahoo Finance, which "
+                "hard-caps sub-hourly intervals at ~60 days) -- real history back to 2022-01-01, "
+                "~4.5 years, on par with the 1 Hour option below. Same ~329-symbol universe "
+                "coverage caveat as the other intraday options: a given month's top-N pick "
+                "outside that set is silently skipped rather than erroring."
             )
         else:
             st.caption(
@@ -475,10 +491,10 @@ elif is_rsi:
         with st.spinner("Running RSI Reversal backtest (15-minute bars, ~60 day window)..."):
             bar_open, bar_high, bar_low, bar_close = cached_load_15min_full_ohlc()
     elif timeframe.startswith("30 Min"):
-        with st.spinner("Fetching 15-minute price data (first run only)..."):
-            ensure_15min_data()
-        with st.spinner("Running RSI Reversal backtest (30-minute bars, ~60 day window)..."):
-            bar_open, bar_high, bar_low, bar_close = cached_load_30min_full_ohlc()
+        with st.spinner("Fetching 30-minute price data (first run only)..."):
+            ensure_30min_data()
+        with st.spinner("Running RSI Reversal backtest (30-minute bars, ~4.5 year window)..."):
+            bar_open, bar_high, bar_low, bar_close = cached_load_30min_upstox_full_ohlc()
     else:
         with st.spinner("Fetching hourly price data (first run only)..."):
             ensure_hourly_data()
@@ -510,7 +526,8 @@ if trades.empty or equity.empty:
         "No trades were generated with these parameters -- try a lower gap threshold, a "
         "shorter Donchian lookback, a larger universe, (for the EMA/Short Momentum strategies) "
         "a shorter fast/slow EMA span, (for ORB) a shorter opening range, or (for RSI Reversal) "
-        "a higher RSI threshold or a longer timeframe (15/30-min only have a ~60 day window)."
+        "a higher RSI threshold, or (for 15-min specifically) a longer timeframe -- it's the "
+        "only one still capped at a ~60 day window."
     )
     st.stop()
 
