@@ -80,6 +80,21 @@ with st.sidebar:
              "however deep it gets -- this isn't a buy-every-day-it's-down strategy."
     )
 
+    st.header("Data & display")
+    use_custom_start = st.checkbox(
+        "Custom start date", value=False,
+        help="Shows what this would look like if you'd started watching for corrections from a "
+             "specific date, instead of from the earliest available history. The all-time-high "
+             "reference resets fresh at this date too (it's YOUR all-time-high-since-you-started, "
+             "not the instrument's true all-time high from before then) -- same convention as the "
+             "SIP Simulator page's lumpsum sleeve, which uses this identical mechanism."
+    )
+    custom_start_date = None
+    if use_custom_start:
+        custom_start_date = st.date_input(
+            "Start date", value=pd.Timestamp.today() - pd.DateOffset(years=5),
+        )
+
 if not selected:
     st.warning("Pick at least one instrument in the sidebar.")
     st.stop()
@@ -90,6 +105,15 @@ for name in selected:
     px = cached_load_correction_instrument(name, price_col)
     prices_by_name[name] = px
     returns_by_name[name] = px.pct_change().dropna()
+
+if custom_start_date is not None:
+    start_ts = pd.Timestamp(custom_start_date)
+    returns_by_name = {n: r[r.index >= start_ts] for n, r in returns_by_name.items()}
+    prices_by_name = {n: p[p.index >= start_ts] for n, p in prices_by_name.items()}
+    if all(len(r) == 0 for r in returns_by_name.values()):
+        st.warning(f"No data falls on or after {start_ts.date()} -- pick an earlier start date.")
+        st.stop()
+    st.info(f"Showing results as if watching for corrections started on **{start_ts.date()}**.")
 
 if is_multi:
     with st.spinner("Running combined correction-lumpsum backtest..."):

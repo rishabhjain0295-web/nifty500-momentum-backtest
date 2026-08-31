@@ -84,6 +84,21 @@ with st.sidebar:
     min_price = st.number_input("Minimum price filter (Rs)", min_value=0.0, value=10.0, step=5.0)
     use_membership_filter = st.checkbox("Enforce point-in-time index membership", value=True)
 
+    use_custom_start = st.checkbox(
+        "Custom start date", value=False,
+        help="Shows what the SIP would look like if you'd started contributing on a specific "
+             "date, instead of from the earliest available history. The ranking lookback still "
+             "uses real price history from before this date. Note: the drawdown/all-time-high "
+             "reference used by the dynamic SIP and lumpsum triggers below also resets fresh at "
+             "this date (it doesn't know about any peak that existed before you started), "
+             "consistent with everything else on this page."
+    )
+    custom_start_date = None
+    if use_custom_start:
+        custom_start_date = st.date_input(
+            "Start date", value=pd.Timestamp.today() - pd.DateOffset(years=5),
+        )
+
     st.header("SIP parameters")
     sip_amount = st.number_input("Monthly SIP amount (Rs)", min_value=500.0, value=10000.0, step=500.0)
     strategy_alloc_pct = st.slider(
@@ -154,6 +169,18 @@ if len(strat_rets) == 0:
         "number of stocks held or shortening the lookback."
     )
     st.stop()
+
+if custom_start_date is not None:
+    start_ts = pd.Timestamp(custom_start_date)
+    strat_rets = strat_rets[strat_rets.index >= start_ts]
+    holdings_history = [(d, h) for d, h in holdings_history if d >= start_ts]
+    if len(strat_rets) == 0:
+        st.warning(
+            f"No months fall on or after {start_ts.date()} -- pick an earlier start date, "
+            "or the strategy's data doesn't extend that recently."
+        )
+        st.stop()
+    st.info(f"Showing results as if the SIP started on **{start_ts.date()}** ({len(strat_rets)} months since).")
 
 liquid_rets = liquid_px.pct_change().reindex(strat_rets.index)
 

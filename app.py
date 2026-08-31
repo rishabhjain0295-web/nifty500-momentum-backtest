@@ -239,6 +239,21 @@ with st.sidebar:
     )
     log_scale = st.checkbox("Log scale equity curve", value=True)
 
+    use_custom_start = st.checkbox(
+        "Custom start date", value=False,
+        help="Shows what the backtest would look like if you'd started investing on a "
+             "specific date, instead of from the earliest available history. The ranking "
+             f"lookback still uses real price history from BEFORE this date (so the first "
+             f"{period_word} after it is ranked correctly, not cold-started) -- only the "
+             "displayed performance, trade log, and rebalance count are re-based to begin "
+             "from this date, as if capital were first deployed then."
+    )
+    custom_start_date = None
+    if use_custom_start:
+        custom_start_date = st.date_input(
+            "Start date", value=pd.Timestamp.today() - pd.DateOffset(years=5),
+        )
+
     st.header("Costs & taxes (India)")
     apply_costs_taxes = st.checkbox(
         "Apply transaction costs & capital gains tax", value=False,
@@ -307,6 +322,18 @@ if use_stoploss or use_execution_lag:
 bench_rets = bench_px.pct_change().reindex(strat_rets.index).dropna()
 strat_rets = strat_rets.reindex(bench_rets.index)
 
+if custom_start_date is not None:
+    start_ts = pd.Timestamp(custom_start_date)
+    strat_rets = strat_rets[strat_rets.index >= start_ts]
+    bench_rets = bench_rets[bench_rets.index >= start_ts]
+    holdings_history = [(d, h) for d, h in holdings_history if d >= start_ts]
+    if len(strat_rets) == 0:
+        st.warning(
+            f"No rebalances fall on or after {start_ts.date()} -- pick an earlier start date, "
+            "or the strategy's data doesn't extend that recently."
+        )
+        st.stop()
+
 perf_freq = 52 if is_weekly else 12
 strat_stats = perf_stats(strat_rets, freq=perf_freq)
 bench_stats = perf_stats(bench_rets, freq=perf_freq)
@@ -329,6 +356,13 @@ if apply_costs_taxes and len(strat_rets) > 0:
     )
     post_cost_stats = perf_stats(cost_tax_result["nav_post_cost"].pct_change().dropna(), freq=perf_freq)
     post_tax_stats = perf_stats(cost_tax_result["nav_net"].pct_change().dropna(), freq=perf_freq)
+
+if custom_start_date is not None:
+    st.info(
+        f"Showing results as if capital were first deployed on **{pd.Timestamp(custom_start_date).date()}** "
+        f"({len(holdings_history)} rebalances since). Ranking still uses real price history from "
+        "before this date, so the first rebalance shown isn't cold-started."
+    )
 
 st.subheader("Performance")
 cols = st.columns(5)

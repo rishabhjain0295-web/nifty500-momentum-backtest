@@ -76,6 +76,7 @@ def _build_universe_calendar(
     min_price: float,
     allowed_symbols: set[str] | None = None,
     weakest: bool = False,
+    min_start_date: pd.Timestamp | None = None,
 ) -> list[tuple[pd.Timestamp, list[str]]]:
     """Top (or, if weakest=True, bottom) n_stocks by momentum rank at each
     monthly rebalance date -- the shared universe-selection logic behind
@@ -88,7 +89,18 @@ def _build_universe_calendar(
     trades stocks that actually have tradeable stock futures, not the full
     momentum universe. weakest=True picks the n_stocks with the LOWEST
     trailing return instead of the highest (compute_momentum_ranking always
-    returns descending-sorted, so this just reads from the tail)."""
+    returns descending-sorted, so this just reads from the tail).
+
+    min_start_date, if given, drops rebalance dates before it from the
+    RETURNED calendar only -- ranking is still computed for every date from
+    the normal lookback-derived start (compute_momentum_ranking always sees
+    full trailing history), so the first surviving rebalance is ranked
+    correctly, not cold-started. This is what lets the "custom start date"
+    feature (see pages/3_Swing_Trading.py) show what a strategy would look
+    like starting fresh on a chosen date: every run_*_backtest function
+    derives its own trading-loop start purely from this calendar's first
+    entry, so filtering it here is sufficient -- no other loop logic needs
+    to change."""
     monthly_dates = monthly_prices.index
     min_history_months = lookback_months + skip_months + 1
     universe_by_period: list[tuple[pd.Timestamp, list[str]]] = []
@@ -103,6 +115,8 @@ def _build_universe_calendar(
             continue
         picked = ranked.tail(n_stocks).index.tolist() if weakest else ranked.head(n_stocks).index.tolist()
         universe_by_period.append((today, picked))
+    if min_start_date is not None:
+        universe_by_period = [(d, p) for d, p in universe_by_period if d >= min_start_date]
     return universe_by_period
 
 
@@ -128,11 +142,12 @@ def run_swing_backtest(
     max_position_pct: float = 20.0,
     capital_base: float = 1_000_000.0,
     allowed_symbols: set[str] | None = None,
+    min_start_date: pd.Timestamp | None = None,
 ) -> dict:
     # 1. universe calendar: top n_stocks at each monthly rebalance
     universe_by_period = _build_universe_calendar(
         monthly_prices, membership, lookback_months, skip_months, n_stocks, min_price,
-        allowed_symbols=allowed_symbols,
+        allowed_symbols=allowed_symbols, min_start_date=min_start_date,
     )
 
     empty = {
@@ -316,6 +331,7 @@ def run_ema_crossover_backtest(
     min_stop_pct: float = 1.0,
     capital_base: float = 1_000_000.0,
     allowed_symbols: set[str] | None = None,
+    min_start_date: pd.Timestamp | None = None,
 ) -> dict:
     """EMA(ema_fast)/EMA(ema_slow) crossover swing strategy. Timeframe-
     agnostic -- pass daily bars or hourly bars via bar_open/bar_close and
@@ -367,7 +383,7 @@ def run_ema_crossover_backtest(
     """
     universe_by_period = _build_universe_calendar(
         monthly_prices, membership, lookback_months, skip_months, n_stocks, min_price,
-        allowed_symbols=allowed_symbols,
+        allowed_symbols=allowed_symbols, min_start_date=min_start_date,
     )
 
     empty = {
@@ -536,6 +552,7 @@ def run_short_ema_crossover_backtest(
     use_target: bool = False,
     risk_reward_ratio: float = 2.0,
     allowed_symbols: set[str] | None = None,
+    min_start_date: pd.Timestamp | None = None,
 ) -> dict:
     """Short Momentum (F&O): the mirror image of run_ema_crossover_backtest,
     short-selling the WEAKEST momentum stocks within the F&O-eligible
@@ -618,7 +635,7 @@ def run_short_ema_crossover_backtest(
     effective_allowed = fno_symbols if allowed_symbols is None else (fno_symbols & allowed_symbols)
     universe_by_period = _build_universe_calendar(
         monthly_prices, membership, lookback_months, skip_months, n_stocks, min_price,
-        allowed_symbols=effective_allowed, weakest=True,
+        allowed_symbols=effective_allowed, weakest=True, min_start_date=min_start_date,
     )
 
     empty_cols = ["symbol", "entry_date", "entry_price", "entry_rank", "stop_price"]
@@ -840,6 +857,7 @@ def run_orb_backtest(
     position_pct: float = 5.0,
     capital_base: float = 1_000_000.0,
     allowed_symbols: set[str] | None = None,
+    min_start_date: pd.Timestamp | None = None,
 ) -> dict:
     """Opening Range Breakout (ORB), long or short (direction="long" or
     "short"), on hourly bars. Universe: for direction="long", the TOP
@@ -915,7 +933,7 @@ def run_orb_backtest(
         effective_allowed = fno_symbols if allowed_symbols is None else (fno_symbols & allowed_symbols)
     universe_by_period = _build_universe_calendar(
         monthly_prices, membership, lookback_months, skip_months, n_stocks, min_price,
-        allowed_symbols=effective_allowed, weakest=(not is_long),
+        allowed_symbols=effective_allowed, weakest=(not is_long), min_start_date=min_start_date,
     )
 
     empty = {
@@ -1142,6 +1160,7 @@ def run_rsi_reversal_backtest(
     max_position_pct: float = 20.0,
     capital_base: float = 1_000_000.0,
     allowed_symbols: set[str] | None = None,
+    min_start_date: pd.Timestamp | None = None,
 ) -> dict:
     """RSI Oversold Reversal, long only, top-N Nifty 500 momentum universe
     (same as run_ema_crossover_backtest). Timeframe-agnostic -- pass 15m,
@@ -1198,7 +1217,7 @@ def run_rsi_reversal_backtest(
     """
     universe_by_period = _build_universe_calendar(
         monthly_prices, membership, lookback_months, skip_months, n_stocks, min_price,
-        allowed_symbols=allowed_symbols,
+        allowed_symbols=allowed_symbols, min_start_date=min_start_date,
     )
 
     empty = {

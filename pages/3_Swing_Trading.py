@@ -137,6 +137,20 @@ with st.sidebar:
             "point-in-time one (see get_fno_list.py)."
         )
 
+    use_custom_start = st.checkbox(
+        "Custom start date", value=False,
+        help="Shows what this strategy would look like if you'd started trading it on a "
+             "specific date, instead of from the earliest available history. The momentum "
+             "ranking still uses real price history from before this date (so the first "
+             "eligible trade isn't cold-started) -- only the point where capital actually "
+             "starts opening positions moves to this date."
+    )
+    min_start_date = None
+    if use_custom_start:
+        min_start_date = pd.Timestamp(st.date_input(
+            "Start date", value=pd.Timestamp.today() - pd.DateOffset(years=3),
+        ))
+
     timeframe = "Daily"
     ema_fast = 15
     ema_slow = 50
@@ -453,7 +467,7 @@ if is_orb:
             monthly_prices, membership, bar_open, bar_high, bar_low, bar_close, fno_symbols,
             lookback_months, skip_months, n_stocks, min_price,
             orb_direction, range_minutes, max_reentries, orb_stop_mode, stop_pct,
-            position_pct, capital_base, allowed_symbols=universe_allowed_symbols,
+            position_pct, capital_base, allowed_symbols=universe_allowed_symbols, min_start_date=min_start_date,
         )
 elif is_short:
     fno_symbols = cached_load_fno_symbols()
@@ -466,7 +480,7 @@ elif is_short:
                 monthly_prices, membership, bar_open, bar_close, fno_symbols,
                 lookback_months, skip_months, n_stocks, min_price,
                 ema_fast, ema_slow, max_entries, min_stop_pct, capital_base,
-                use_target, risk_reward_ratio, allowed_symbols=universe_allowed_symbols,
+                use_target, risk_reward_ratio, allowed_symbols=universe_allowed_symbols, min_start_date=min_start_date,
             )
     else:
         with st.spinner("Running Short Momentum backtest (hourly bars, ~2-3 year window)..."):
@@ -475,7 +489,7 @@ elif is_short:
                 monthly_prices, membership, bar_open, bar_close, fno_symbols,
                 lookback_months, skip_months, n_stocks, min_price,
                 ema_fast, ema_slow, max_entries, min_stop_pct, capital_base,
-                use_target, risk_reward_ratio, allowed_symbols=universe_allowed_symbols,
+                use_target, risk_reward_ratio, allowed_symbols=universe_allowed_symbols, min_start_date=min_start_date,
             )
 elif is_ema:
     if timeframe.startswith("Hourly (Yahoo"):
@@ -487,7 +501,7 @@ elif is_ema:
                 monthly_prices, membership, bar_open, bar_close,
                 lookback_months, skip_months, n_stocks, min_price,
                 ema_fast, ema_slow, risk_pct, max_position_pct, min_stop_pct, capital_base,
-                allowed_symbols=universe_allowed_symbols,
+                allowed_symbols=universe_allowed_symbols, min_start_date=min_start_date,
             )
     elif timeframe.startswith("Hourly (Upstox"):
         with st.spinner("Fetching 30-minute price data (first run only)..."):
@@ -498,7 +512,7 @@ elif is_ema:
                 monthly_prices, membership, bar_open, bar_close,
                 lookback_months, skip_months, n_stocks, min_price,
                 ema_fast, ema_slow, risk_pct, max_position_pct, min_stop_pct, capital_base,
-                allowed_symbols=universe_allowed_symbols,
+                allowed_symbols=universe_allowed_symbols, min_start_date=min_start_date,
             )
     else:
         with st.spinner("Running EMA crossover backtest (daily bars, full history)..."):
@@ -507,7 +521,7 @@ elif is_ema:
                 monthly_prices, membership, daily_open, daily_close,
                 lookback_months, skip_months, n_stocks, min_price,
                 ema_fast, ema_slow, risk_pct, max_position_pct, min_stop_pct, capital_base,
-                allowed_symbols=universe_allowed_symbols,
+                allowed_symbols=universe_allowed_symbols, min_start_date=min_start_date,
             )
 elif is_rsi:
     if timeframe.startswith("15 Min"):
@@ -529,7 +543,7 @@ elif is_rsi:
         monthly_prices, membership, bar_open, bar_high, bar_low, bar_close,
         lookback_months, skip_months, n_stocks, min_price,
         rsi_period, rsi_threshold, risk_reward_ratio, max_hold_days, max_stop_pct, min_stop_pct,
-        risk_pct, max_position_pct, capital_base, allowed_symbols=universe_allowed_symbols,
+        risk_pct, max_position_pct, capital_base, allowed_symbols=universe_allowed_symbols, min_start_date=min_start_date,
     )
 else:
     daily_open, daily_high, daily_low, daily_close = cached_load_daily_ohlc()
@@ -540,19 +554,26 @@ else:
             entry_strategy, gap_pct, donchian_entry_lookback,
             exit_mode, exit_lookback_days, stop_pct,
             risk_pct, risk_reward_ratio, max_position_pct, capital_base,
-            allowed_symbols=universe_allowed_symbols,
+            allowed_symbols=universe_allowed_symbols, min_start_date=min_start_date,
         )
 
 trades = result["trades"]
 equity = result["equity"]
 
+if min_start_date is not None and not trades.empty:
+    st.info(
+        f"Showing results as if this strategy started trading on **{min_start_date.date()}** "
+        f"({len(trades)} trades since). Momentum ranking still uses real price history from "
+        "before this date."
+    )
+
 if trades.empty or equity.empty:
     st.warning(
         "No trades were generated with these parameters -- try a lower gap threshold, a "
         "shorter Donchian lookback, a larger universe, (for the EMA/Short Momentum strategies) "
-        "a shorter fast/slow EMA span, (for ORB) a shorter opening range, or (for RSI Reversal) "
-        "a higher RSI threshold, or (for 15-min specifically) a longer timeframe -- it's the "
-        "only one still capped at a ~60 day window."
+        "a shorter fast/slow EMA span, (for ORB) a shorter opening range, (for RSI Reversal) "
+        "a higher RSI threshold, an earlier custom start date, or (for 15-min specifically) a "
+        "longer timeframe -- it's the only one still capped at a ~60 day window."
     )
     st.stop()
 

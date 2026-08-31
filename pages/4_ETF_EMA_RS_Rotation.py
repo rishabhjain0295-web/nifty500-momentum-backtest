@@ -78,6 +78,19 @@ with st.sidebar:
     price_col = st.selectbox("Price field", ["Close", "Adj Close"], index=0)
     log_scale = st.checkbox("Log scale equity curve", value=True)
 
+    use_custom_start = st.checkbox(
+        "Custom start date", value=False,
+        help="Shows what the strategy would look like if you'd started on a specific date, "
+             "instead of from the earliest available history. The EMA/RS signals still use "
+             "real price history from before this date to stay warmed up -- only the "
+             "displayed performance, signal log, and chart are re-based to begin from this date."
+    )
+    custom_start_date = None
+    if use_custom_start:
+        custom_start_date = st.date_input(
+            "Start date", value=pd.Timestamp.today() - pd.DateOffset(years=5),
+        )
+
 spot, prices, equity_symbol = cached_load_ema_rs_data(leg_key, price_col)
 
 with st.spinner("Running backtest..."):
@@ -96,7 +109,20 @@ if len(strat_rets) == 0:
     )
     st.stop()
 
-n_years = (bench_rets.index[-1] - bench_rets.index[0]).days / 365.25
+if custom_start_date is not None:
+    start_ts = pd.Timestamp(custom_start_date)
+    strat_rets = strat_rets[strat_rets.index >= start_ts]
+    bench_rets = bench_rets[bench_rets.index >= start_ts]
+    signal_log = signal_log[signal_log["exec_date"] >= start_ts] if not signal_log.empty else signal_log
+    diagnostics = diagnostics[diagnostics.index >= start_ts]
+    if len(strat_rets) == 0:
+        st.warning(
+            f"No data falls on or after {start_ts.date()} -- pick an earlier start date."
+        )
+        st.stop()
+    st.info(f"Showing results as if the strategy started on **{start_ts.date()}** ({len(strat_rets)} days since).")
+
+n_years = (bench_px.index[-1] - bench_px.index[0]).days / 365.25
 if n_years < 5:
     st.info(
         f"**{leg['label']}** only has ~{n_years:.1f} years of ETF history ({bench_px.index.min().date()} "
