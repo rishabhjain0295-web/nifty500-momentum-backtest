@@ -514,8 +514,20 @@ if len(strat_rets) == 0:
         "the lookback, or picking a larger Universe."
     )
 else:
-    st.subheader("Equity curve")
     strat_cum = (1 + strat_rets).cumprod()
+
+    st.subheader("Investment value")
+    start_capital = st.number_input(
+        "Starting capital (Rs)", min_value=1_000.0, value=100_000.0, step=10_000.0,
+        help="What this becomes today, compounding at the strategy's own gross returns shown below."
+    )
+    final_value = start_capital * strat_cum.iloc[-1]
+    st.metric(
+        f"Value today (invested {strat_cum.index[0].date()})", f"Rs {final_value:,.0f}",
+        delta=fmt_pct(strat_cum.iloc[-1] - 1) + " total return",
+    )
+
+    st.subheader("Equity curve")
     bench_cum = (1 + bench_rets).cumprod()
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=strat_cum.index, y=strat_cum.values, name="Momentum strategy (gross)", line=dict(width=2)))
