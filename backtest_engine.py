@@ -34,6 +34,7 @@ ETF_DIR = ROOT / "data" / "etfs"
 HOURLY_DIR = ROOT / "data" / "hourly"
 FIFTEEN_MIN_DIR = ROOT / "data" / "15min"
 THIRTY_MIN_DIR = ROOT / "data" / "30min"
+MUTUAL_FUND_DIR = ROOT / "data" / "mutual_funds"
 MEMBERSHIP_CSV = ROOT / "data" / "nifty500_membership_calendar.csv"
 
 # data/stocks/ and data/hourly/ are too large to commit to git -- both are
@@ -45,6 +46,7 @@ DATA_ARCHIVE_URL = "https://github.com/rishabhjain0295-web/nifty500-momentum-bac
 HOURLY_ARCHIVE_URL = "https://github.com/rishabhjain0295-web/nifty500-momentum-backtest/releases/download/data-v1/hourly.zip"
 FIFTEEN_MIN_ARCHIVE_URL = "https://github.com/rishabhjain0295-web/nifty500-momentum-backtest/releases/download/data-v1/15min.zip"
 THIRTY_MIN_ARCHIVE_URL = "https://github.com/rishabhjain0295-web/nifty500-momentum-backtest/releases/download/data-v1/30min.zip"
+MUTUAL_FUND_ARCHIVE_URL = "https://github.com/rishabhjain0295-web/nifty500-momentum-backtest/releases/download/data-v1/mutual_funds.zip"
 
 
 def _ensure_data_from_archive(target_dir: Path, archive_url: str | None, env_var: str, fallback_url: str) -> None:
@@ -99,6 +101,15 @@ def ensure_30min_data(archive_url: str | None = None) -> None:
     only ever fetches the resulting PRICE DATA the deployed app needs,
     same bootstrap-once model as ensure_hourly_data/ensure_15min_data."""
     _ensure_data_from_archive(THIRTY_MIN_DIR, archive_url, "THIRTY_MIN_ARCHIVE_URL", THIRTY_MIN_ARCHIVE_URL)
+
+
+def ensure_mutual_fund_data(archive_url: str | None = None) -> None:
+    """Download and extract data/mutual_funds/ (used by the Mutual Fund
+    Comparison page) from a GitHub Release asset if it's not already
+    present -- see scripts/download_mutual_funds.py for the source (a
+    free, no-auth AMFI-backed API, unlike the Upstox-sourced intraday
+    data), same bootstrap-once model as every other ensure_*_data."""
+    _ensure_data_from_archive(MUTUAL_FUND_DIR, archive_url, "MUTUAL_FUND_ARCHIVE_URL", MUTUAL_FUND_ARCHIVE_URL)
 
 
 def load_prices(price_col: str = "Adj Close", freq: str = "ME") -> pd.DataFrame:
@@ -441,6 +452,72 @@ def load_correction_instrument_daily(name: str, price_col: str = "Close") -> pd.
     df = pd.read_csv(base_dir / fname, index_col=0, parse_dates=True)
     col = price_col if price_col in df.columns else "Close"
     return df[col].dropna().sort_index()
+
+
+# Curated list of well-known Direct Growth mutual fund schemes for the
+# Mutual Fund Comparison page (see scripts/download_mutual_funds.py) --
+# NOT an exhaustive or AUM-ranked list (no free API gives real-time AUM
+# rankings), just hand-picked well-known funds across major equity
+# categories, spanning several AMCs. Direct Growth specifically, not
+# Regular -- Regular plans carry distributor commission drag baked into
+# a lower NAV, an easier bar for the strategy to beat, not a fair
+# comparison. Several of these are funds whose old marketing names
+# (e.g. "HDFC Top 100", "ICICI Prudential Bluechip", "SBI Bluechip",
+# "Kotak Emerging Equity", "Quant Active Fund") no longer match their
+# CURRENT AMFI scheme name after a rename -- every scheme_code below was
+# verified against the live api.mfapi.in scheme list, not guessed from
+# the old marketing name. scheme_code is the mfapi.in/AMFI code.
+MUTUAL_FUNDS: dict[str, dict] = {
+    # Large Cap
+    "HDFC Large Cap Fund": {"scheme_code": 119018, "category": "Large Cap"},
+    "ICICI Prudential Large Cap Fund": {"scheme_code": 120586, "category": "Large Cap"},
+    "SBI Large Cap Fund": {"scheme_code": 119598, "category": "Large Cap"},
+    "Nippon India Large Cap Fund": {"scheme_code": 118632, "category": "Large Cap"},
+    "Mirae Asset Large Cap Fund": {"scheme_code": 118825, "category": "Large Cap"},
+    # Flexi Cap
+    "Parag Parikh Flexi Cap Fund": {"scheme_code": 122639, "category": "Flexi Cap"},
+    "HDFC Flexi Cap Fund": {"scheme_code": 118955, "category": "Flexi Cap"},
+    "Kotak Flexi Cap Fund": {"scheme_code": 120166, "category": "Flexi Cap"},
+    "Franklin India Flexi Cap Fund": {"scheme_code": 118535, "category": "Flexi Cap"},
+    # Multi Cap
+    "Nippon India Multi Cap Fund": {"scheme_code": 118650, "category": "Multi Cap"},
+    "Quant Multi Cap Fund": {"scheme_code": 120823, "category": "Multi Cap"},
+    "ICICI Prudential Multi Cap Fund": {"scheme_code": 120599, "category": "Multi Cap"},
+    # Mid Cap
+    "HDFC Mid Cap Fund": {"scheme_code": 118989, "category": "Mid Cap"},
+    "Kotak Mid Cap Fund": {"scheme_code": 119775, "category": "Mid Cap"},
+    "Axis Midcap Fund": {"scheme_code": 120505, "category": "Mid Cap"},
+    "DSP Midcap Fund": {"scheme_code": 119071, "category": "Mid Cap"},
+    # Small Cap
+    "SBI Small Cap Fund": {"scheme_code": 125497, "category": "Small Cap"},
+    "Nippon India Small Cap Fund": {"scheme_code": 118778, "category": "Small Cap"},
+    "Axis Small Cap Fund": {"scheme_code": 125354, "category": "Small Cap"},
+    "Quant Small Cap Fund": {"scheme_code": 120828, "category": "Small Cap"},
+    # ELSS
+    "Axis ELSS Tax Saver Fund": {"scheme_code": 120503, "category": "ELSS"},
+    "Mirae Asset ELSS Tax Saver Fund": {"scheme_code": 135781, "category": "ELSS"},
+    "SBI ELSS Tax Saver Fund": {"scheme_code": 119723, "category": "ELSS"},
+    # Index / Passive
+    "UTI Nifty 50 Index Fund": {"scheme_code": 120716, "category": "Index"},
+    "HDFC Nifty 50 Index Fund": {"scheme_code": 119063, "category": "Index"},
+    # Momentum (thematically the closest comparison to this project's own strategy)
+    "UTI Nifty 200 Momentum 30 Index Fund": {"scheme_code": 148703, "category": "Momentum"},
+    "quant Momentum Fund": {"scheme_code": 152189, "category": "Momentum"},
+    "Axis Nifty500 Momentum 50 Index Fund": {"scheme_code": 153244, "category": "Momentum"},
+}
+
+
+def load_mutual_fund_nav(name: str) -> pd.Series:
+    """DAILY NAV series for one of MUTUAL_FUNDS, from data/mutual_funds/
+    <scheme_code>.csv (see scripts/download_mutual_funds.py). Like
+    load_correction_instrument_daily, this is daily (not monthly) --
+    the Mutual Fund Comparison page resamples to month-end itself,
+    matching load_benchmark's convention, so both sides of the
+    comparison share the exact same rebalance-date grid."""
+    scheme_code = MUTUAL_FUNDS[name]["scheme_code"]
+    f = MUTUAL_FUND_DIR / f"{scheme_code}.csv"
+    df = pd.read_csv(f, index_col=0, parse_dates=True)
+    return df["NAV"].dropna().sort_index()
 
 
 def load_current_universe() -> pd.DataFrame:

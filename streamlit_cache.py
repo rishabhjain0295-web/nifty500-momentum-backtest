@@ -23,6 +23,7 @@ from backtest_engine import (
     load_hourly_upstox_ohlc,
     load_liquid_series,
     load_membership_matrix,
+    load_mutual_fund_nav,
     load_prices,
     load_universe_symbols,
 )
@@ -112,6 +113,11 @@ def cached_load_universe_symbols(name: str) -> set[str]:
 @st.cache_data(show_spinner="Loading price history for correction-triggered lumpsum...")
 def cached_load_correction_instrument(name: str, price_col: str) -> pd.Series:
     return load_correction_instrument_daily(name, price_col)
+
+
+@st.cache_data(show_spinner="Loading mutual fund NAV history...")
+def cached_load_mutual_fund_nav(name: str) -> pd.Series:
+    return load_mutual_fund_nav(name)
 
 
 @st.cache_data(show_spinner="Loading spot index / ETF price history...")

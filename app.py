@@ -16,6 +16,11 @@ weekly price grid (see backtest_engine.load_prices' freq param) rather
 than just rebalancing a monthly ranking more often. The GOLDBEES regime
 filter is monthly-only for now -- its 150/55 lookback windows are
 calibrated in months and aren't auto-converted to weeks.
+
+Optionally overlays one Direct Growth mutual fund scheme (see
+backtest_engine.MUTUAL_FUNDS) alongside the Nifty 500 benchmark, in the
+KPIs, equity curve, and drawdown chart -- a hand-picked list of well-known
+funds, not exhaustive or AUM-ranked.
 """
 import numpy as np
 import pandas as pd
@@ -23,10 +28,12 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from backtest_engine import (
+    MUTUAL_FUNDS,
     NSE_UNIVERSES,
     apply_execution_lag,
     apply_stoploss,
     build_trade_log,
+    ensure_mutual_fund_data,
     ensure_stock_data,
     perf_stats,
     run_backtest,
@@ -37,6 +44,7 @@ from streamlit_cache import (
     cached_load_daily_prices,
     cached_load_gold,
     cached_load_membership,
+    cached_load_mutual_fund_nav,
     cached_load_prices,
     cached_load_universe_symbols,
 )
@@ -46,6 +54,7 @@ st.set_page_config(page_title="Nifty 500 Momentum Backtest", layout="wide")
 
 with st.spinner("Fetching price data (first run only)..."):
     ensure_stock_data()
+    ensure_mutual_fund_data()
 
 
 def fmt_pct(x: float) -> str:
@@ -254,6 +263,19 @@ with st.sidebar:
             "Start date", value=pd.Timestamp.today() - pd.DateOffset(years=5),
         )
 
+    st.header("Compare against a mutual fund")
+    fund_choice = st.selectbox(
+        "Mutual fund (optional)", ["None"] + list(MUTUAL_FUNDS.keys()),
+        format_func=lambda n: n if n == "None" else f"[{MUTUAL_FUNDS[n]['category']}] {n}",
+        help="Adds one Direct Growth mutual fund scheme alongside the Nifty 500 benchmark, "
+             "everywhere the benchmark is shown -- KPIs, equity curve, drawdown. A hand-picked "
+             "list of well-known funds (not exhaustive or AUM-ranked), Direct Growth only (not "
+             "Regular, which carries distributor commission drag). Source: api.mfapi.in. If the "
+             "fund's history starts later than the strategy's, its line/stats simply begin later "
+             "-- combine with Custom start date above for an apples-to-apples window."
+    )
+    compare_fund = fund_choice if fund_choice != "None" else None
+
     st.header("Costs & taxes (India)")
     apply_costs_taxes = st.checkbox(
         "Apply transaction costs & capital gains tax", value=False,
@@ -338,6 +360,19 @@ perf_freq = 52 if is_weekly else 12
 strat_stats = perf_stats(strat_rets, freq=perf_freq)
 bench_stats = perf_stats(bench_rets, freq=perf_freq)
 
+fund_rets = None
+fund_stats = None
+if compare_fund is not None:
+    fund_nav = cached_load_mutual_fund_nav(compare_fund).resample(price_freq).last()
+    fund_rets = fund_nav.pct_change().dropna()
+    if custom_start_date is not None:
+        fund_rets = fund_rets[fund_rets.index >= pd.Timestamp(custom_start_date)]
+    if len(fund_rets) > 1:
+        fund_stats = perf_stats(fund_rets, freq=perf_freq)
+    else:
+        st.sidebar.warning(f"{compare_fund}: no data in the selected window.")
+        fund_rets = None
+
 cost_tax_result = None
 post_cost_stats = None
 post_tax_stats = None
@@ -376,6 +411,8 @@ for col, label in zip(cols, labels):
         delta = f"{fmt(strat_v - bench_v) if label != 'Sharpe' else fmt_ratio(strat_v - bench_v)} vs bench"
     col.metric(label, fmt(strat_v), delta=delta)
     col.caption(f"Benchmark: {fmt(bench_v)}")
+    if fund_stats is not None:
+        col.caption(f"{compare_fund}: {fmt(fund_stats[label])}")
 
 if post_tax_stats is not None:
     st.caption("Gross (pre-cost, pre-tax) shown above. Post-cost and post-cost-and-tax below.")
@@ -431,6 +468,9 @@ else:
             name="Post-cost & tax", line=dict(width=2, dash="dot"),
         ))
     fig.add_trace(go.Scatter(x=bench_cum.index, y=bench_cum.values, name="Nifty 500", line=dict(width=2)))
+    if fund_rets is not None:
+        fund_cum = (1 + fund_rets).cumprod()
+        fig.add_trace(go.Scatter(x=fund_cum.index, y=fund_cum.values, name=compare_fund, line=dict(width=2, dash="dashdot")))
     fig.update_layout(
         yaxis_type="log" if log_scale else "linear",
         yaxis_title="Growth of Rs 1",
@@ -446,6 +486,9 @@ else:
     fig_dd = go.Figure()
     fig_dd.add_trace(go.Scatter(x=dd.index, y=dd.values, name="Momentum strategy", fill="tozeroy"))
     fig_dd.add_trace(go.Scatter(x=bench_dd.index, y=bench_dd.values, name="Nifty 500", line=dict(dash="dot")))
+    if fund_rets is not None:
+        fund_dd = fund_cum / fund_cum.cummax() - 1
+        fig_dd.add_trace(go.Scatter(x=fund_dd.index, y=fund_dd.values, name=compare_fund, line=dict(dash="dashdot")))
     fig_dd.update_layout(
         yaxis_tickformat=".0%",
         legend=dict(orientation="h", yanchor="bottom", y=1.02),

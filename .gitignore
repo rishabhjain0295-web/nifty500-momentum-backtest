@@ -2,6 +2,7 @@ data/stocks/
 data/hourly/
 data/15min/
 data/30min/
+data/mutual_funds/
 data/*.zip
 data/failed_hourly_symbols.txt
 __pycache__/
@@ -17,3 +18,4 @@ download_15min_log.txt
 refresh_weekly_log.txt
 download_upstox_30min_log.txt
 backfill_upstox_30min_log.txt
+download_mutual_funds_log.txt
