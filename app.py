@@ -39,6 +39,7 @@ from backtest_engine import (
     run_backtest,
     yearly_table,
 )
+from leverage_engine import apply_mtf_leverage
 from streamlit_cache import (
     cached_load_benchmark,
     cached_load_daily_prices,
@@ -276,6 +277,58 @@ with st.sidebar:
     )
     compare_fund = fund_choice if fund_choice != "None" else None
 
+    st.header("MTF Leverage Overlay")
+    use_leverage = st.checkbox(
+        "Enable MTF leverage overlay", value=False,
+        help="Optional, two-stage drawdown-triggered leverage: adds extra MTF (Margin Trading "
+             "Facility) exposure after a bad month, and more after a second bad month soon "
+             "after, on top of the strategy's own returns. Applied IN PLACE to the strategy's "
+             "returns -- like the stoploss/T+1 execution overlays above, this changes the same "
+             "'Momentum strategy' line everywhere (KPIs, equity curve, trade log), rather than "
+             "adding a separate comparison line. Toggle it on/off to compare with vs. without."
+    )
+    if use_leverage:
+        lev_trigger1_pct = st.slider(
+            "Leg 1 trigger: month return <= -X%", min_value=1.0, max_value=30.0, value=7.0, step=0.5,
+            help="A month with return at or below negative this % adds the first leg of leverage."
+        )
+        lev_leg1_pct = st.slider(
+            "Leg 1 leverage added (%)", min_value=5.0, max_value=200.0, value=50.0, step=5.0,
+            help="Extra exposure added as a fraction of current equity, e.g. 50% means 150% total exposure."
+        )
+        lev_trigger2_pct = st.slider(
+            "Leg 2 trigger: another month return <= -X% within 2 months of leg 1", min_value=1.0,
+            max_value=30.0, value=5.0, step=0.5,
+            help="Within the 2 months AFTER leg 1's trigger month, a further month at or below "
+                 "negative this % adds a second leg -- fires at most once per leg-1 cycle."
+        )
+        lev_leg2_pct = st.slider(
+            "Leg 2 leverage added (%)", min_value=5.0, max_value=200.0, value=50.0, step=5.0,
+            help="Additional exposure on top of leg 1, e.g. 50%+50% = 200% total exposure while both are active."
+        )
+        lev_hold_mode_label = st.radio(
+            "Hold duration", ["Fixed number of months", "Until recovery above previous ATH"], index=0,
+            help="Fixed months: each leg independently expires N months after its own trigger. "
+                 "ATH recovery: a leg stays active until the strategy's OWN (unleveraged) NAV "
+                 "recovers to X% above its all-time-high as of that leg's trigger month -- can "
+                 "run much longer than a fixed window during a slow recovery."
+        )
+        lev_hold_mode = "fixed_months" if lev_hold_mode_label.startswith("Fixed") else "ath_recovery"
+        lev_hold_months = 6
+        lev_recovery_pct = 0.0
+        if lev_hold_mode == "fixed_months":
+            lev_hold_months = st.slider("Hold duration (months)", min_value=1, max_value=36, value=6, step=1)
+        else:
+            lev_recovery_pct = st.slider(
+                "Recovery above previous ATH to revert (%)", min_value=0.0, max_value=50.0, value=0.0, step=1.0,
+                help="0 = reverts as soon as the strategy's NAV merely reclaims its old high."
+            )
+        lev_annual_interest_pct = st.number_input(
+            "MTF interest rate (% per year)", min_value=0.0, value=10.0, step=0.5,
+            help="Charged monthly on the borrowed (leveraged) amount, deducted from equity "
+                 "regardless of that month's P&L."
+        )
+
     st.header("Costs & taxes (India)")
     apply_costs_taxes = st.checkbox(
         "Apply transaction costs & capital gains tax", value=False,
@@ -340,6 +393,14 @@ if use_stoploss or use_execution_lag:
         for m_date, r in exec_lag_overlay.items():
             if m_date in strat_rets.index:
                 strat_rets.loc[m_date] = r
+
+leverage_result = None
+if use_leverage and len(strat_rets) > 0:
+    leverage_result = apply_mtf_leverage(
+        strat_rets, lev_trigger1_pct, lev_leg1_pct, lev_trigger2_pct, lev_leg2_pct,
+        lev_hold_mode, lev_hold_months, lev_recovery_pct, lev_annual_interest_pct,
+    )
+    strat_rets = leverage_result["leveraged_rets"]
 
 bench_rets = bench_px.pct_change().reindex(strat_rets.index).dropna()
 strat_rets = strat_rets.reindex(bench_rets.index)
@@ -556,6 +617,28 @@ else:
             n_switches = sum(1 for s in segments if s[2] == "GOLDBEES")
             st.caption(f"{n_switches} switch(es) into GOLDBEES over the backtest period.")
             st.dataframe(seg_df, hide_index=True, height=250)
+
+    if leverage_result is not None:
+        with st.expander("MTF leverage overlay: tranche log & interest"):
+            total_interest_rs = leverage_result["interest_series"].sum() * capital_base
+            st.caption(
+                f"{leverage_result['n_tranches']} tranche(s) triggered over the backtest period. "
+                f"Total interest paid: Rs {total_interest_rs:,.0f} (on a Rs {capital_base:,.0f} capital base)."
+            )
+            if leverage_result["events"]:
+                ev_df = pd.DataFrame(leverage_result["events"])
+                ev_df["date"] = ev_df["date"].dt.date
+                ev_df["start"] = ev_df["start"].dt.date
+                ev_df["end"] = ev_df["end"].dt.date
+                st.dataframe(
+                    ev_df.rename(columns={
+                        "date": "Trigger month", "leg": "Leg", "month_return": "Month return",
+                        "start": "Active from", "end": "Active until",
+                    }).style.format({"Month return": "{:.2%}"}),
+                    hide_index=True, height=250,
+                )
+            else:
+                st.caption("No leverage triggers with these parameters.")
 
     st.subheader("All trades")
     st.caption(

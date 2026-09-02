@@ -6,12 +6,18 @@ strategy during drawdowns. See sip_engine.py for the exact mechanics and a
 documented ambiguity in the source spec (whether exiting "aggressive" mode
 force-rebalances existing holdings back to the target split -- currently:
 no, only future contributions change).
+
+Optionally overlays two-stage MTF leverage (see leverage_engine.py) on the
+underlying strategy's own returns, applied BEFORE all of the above -- so
+Plain SIP, Dynamic SIP, and the Lumpsum sleeve all reflect it uniformly
+when enabled.
 """
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
 from backtest_engine import NSE_UNIVERSES, apply_execution_lag, ensure_stock_data, run_backtest
+from leverage_engine import apply_mtf_leverage
 from sip_engine import simulate_dynamic_sip, simulate_lumpsum_on_drawdown, simulate_plain_sip
 from streamlit_cache import (
     cached_load_daily_prices,
@@ -99,6 +105,45 @@ with st.sidebar:
             "Start date", value=pd.Timestamp.today() - pd.DateOffset(years=5),
         )
 
+    st.header("MTF Leverage Overlay")
+    use_leverage = st.checkbox(
+        "Enable MTF leverage overlay", value=False,
+        help="Optional, two-stage drawdown-triggered leverage on the underlying momentum "
+             "strategy's own returns -- applied BEFORE the SIP/Dynamic SIP/Lumpsum simulations "
+             "below, so all of them reflect the leveraged returns uniformly when this is on "
+             "(Dynamic SIP's own drawdown trigger will then react to the leveraged, larger "
+             "swings too)."
+    )
+    if use_leverage:
+        lev_trigger1_pct = st.slider(
+            "Leg 1 trigger: month return <= -X%", min_value=1.0, max_value=30.0, value=7.0, step=0.5,
+        )
+        lev_leg1_pct = st.slider(
+            "Leg 1 leverage added (%)", min_value=5.0, max_value=200.0, value=50.0, step=5.0,
+        )
+        lev_trigger2_pct = st.slider(
+            "Leg 2 trigger: another month return <= -X% within 2 months of leg 1", min_value=1.0,
+            max_value=30.0, value=5.0, step=0.5,
+        )
+        lev_leg2_pct = st.slider(
+            "Leg 2 leverage added (%)", min_value=5.0, max_value=200.0, value=50.0, step=5.0,
+        )
+        lev_hold_mode_label = st.radio(
+            "Hold duration", ["Fixed number of months", "Until recovery above previous ATH"], index=0,
+        )
+        lev_hold_mode = "fixed_months" if lev_hold_mode_label.startswith("Fixed") else "ath_recovery"
+        lev_hold_months = 6
+        lev_recovery_pct = 0.0
+        if lev_hold_mode == "fixed_months":
+            lev_hold_months = st.slider("Hold duration (months)", min_value=1, max_value=36, value=6, step=1)
+        else:
+            lev_recovery_pct = st.slider(
+                "Recovery above previous ATH to revert (%)", min_value=0.0, max_value=50.0, value=0.0, step=1.0,
+            )
+        lev_annual_interest_pct = st.number_input(
+            "MTF interest rate (% per year)", min_value=0.0, value=10.0, step=0.5,
+        )
+
     st.header("SIP parameters")
     sip_amount = st.number_input("Monthly SIP amount (Rs)", min_value=500.0, value=10000.0, step=500.0)
     strategy_alloc_pct = st.slider(
@@ -170,6 +215,14 @@ if len(strat_rets) == 0:
     )
     st.stop()
 
+leverage_result = None
+if use_leverage:
+    leverage_result = apply_mtf_leverage(
+        strat_rets, lev_trigger1_pct, lev_leg1_pct, lev_trigger2_pct, lev_leg2_pct,
+        lev_hold_mode, lev_hold_months, lev_recovery_pct, lev_annual_interest_pct,
+    )
+    strat_rets = leverage_result["leveraged_rets"]
+
 if custom_start_date is not None:
     start_ts = pd.Timestamp(custom_start_date)
     strat_rets = strat_rets[strat_rets.index >= start_ts]
@@ -214,6 +267,29 @@ st.caption(
     f"in full-allocation mode, across {len(dynamic['transitions']) // 2} trigger/recovery cycle(s) "
     f"(a cycle may be incomplete if still in aggressive mode at the end of the backtest)."
 )
+
+if leverage_result is not None:
+    with st.expander(f"MTF leverage overlay: {leverage_result['n_tranches']} tranche(s) triggered"):
+        st.caption(
+            "Interest is already deducted from the strategy returns used everywhere below (Plain "
+            "SIP, Dynamic SIP, Lumpsum) -- there's no single rupee capital base to report a total "
+            "interest figure against on this page, since a SIP invests incrementally over time "
+            "rather than as one lump sum."
+        )
+        if leverage_result["events"]:
+            ev_df = pd.DataFrame(leverage_result["events"])
+            ev_df["date"] = ev_df["date"].dt.date
+            ev_df["start"] = ev_df["start"].dt.date
+            ev_df["end"] = ev_df["end"].dt.date
+            st.dataframe(
+                ev_df.rename(columns={
+                    "date": "Trigger month", "leg": "Leg", "month_return": "Month return",
+                    "start": "Active from", "end": "Active until",
+                }).style.format({"Month return": "{:.2%}"}),
+                hide_index=True, height=200,
+            )
+        else:
+            st.caption("No leverage triggers with these parameters.")
 
 st.subheader("Portfolio value over time")
 fig = go.Figure()
