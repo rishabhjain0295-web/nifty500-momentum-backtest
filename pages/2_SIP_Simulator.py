@@ -1,11 +1,11 @@
 """
-SIP simulator: compares a plain fixed-amount monthly SIP into the momentum
-strategy against a dynamic version that splits contributions between the
-strategy and a liquid fund (LIQUIDBEES), tactically going all-in on the
-strategy during drawdowns. See sip_engine.py for the exact mechanics and a
-documented ambiguity in the source spec (whether exiting "aggressive" mode
-force-rebalances existing holdings back to the target split -- currently:
-no, only future contributions change).
+SIP simulator: a plain fixed-amount monthly SIP into the momentum
+strategy. Optionally (off by default) adds a Dynamic SIP comparison that
+splits contributions between the strategy and a liquid fund (LIQUIDBEES),
+tactically going all-in on the strategy during drawdowns. See sip_engine.py
+for the exact mechanics and a documented ambiguity in the source spec
+(whether exiting "aggressive" mode force-rebalances existing holdings back
+to the target split -- currently: no, only future contributions change).
 
 Optionally overlays two-stage MTF leverage (see leverage_engine.py) on the
 underlying strategy's own returns, applied BEFORE all of the above -- so
@@ -48,11 +48,11 @@ with st.spinner("Fetching price data (first run only)..."):
 
 st.title("SIP Simulator")
 st.caption(
-    "Compares a plain monthly SIP into the momentum strategy against a dynamic version "
-    "that splits between the strategy and a liquid fund, going all-in on the strategy "
-    "during drawdowns. Runs on the core momentum strategy (rank/select/exit-band/T+1 "
-    "execution) -- stoploss and the gold regime filter from the Backtest page aren't "
-    "included here yet."
+    "A plain monthly SIP into the momentum strategy. Optionally (enable in the sidebar) "
+    "compare against a Dynamic SIP that splits between the strategy and a liquid fund, going "
+    "all-in on the strategy during drawdowns. Runs on the core momentum strategy "
+    "(rank/select/exit-band/T+1 execution) -- stoploss and the gold regime filter from the "
+    "Backtest page aren't included here yet."
 )
 
 with st.sidebar:
@@ -160,23 +160,35 @@ with st.sidebar:
 
     st.header("SIP parameters")
     sip_amount = st.number_input("Monthly SIP amount (Rs)", min_value=500.0, value=10000.0, step=500.0)
-    strategy_alloc_pct = st.slider(
-        "Normal-mode allocation to strategy (%)", min_value=10, max_value=100, value=70, step=5,
-        help="The rest goes to the liquid fund (LIQUIDBEES). E.g. 70 means Rs 7,000 of a "
-             "Rs 10,000 SIP goes to the strategy, Rs 3,000 to the liquid fund."
+
+    st.header("Dynamic SIP")
+    use_dynamic = st.checkbox(
+        "Enable Dynamic SIP", value=False,
+        help="Optional: a version that splits contributions between the strategy and a liquid "
+             "fund (LIQUIDBEES) normally, tactically going all-in on the strategy during "
+             "drawdowns. Off by default -- Plain SIP alone is shown unless you turn this on."
     )
-    drawdown_trigger_pct = st.slider(
-        "Drawdown that triggers full allocation (%)", min_value=1, max_value=50, value=15, step=1,
-        help="When the strategy's own NAV falls this far below its running all-time high, the "
-             "entire liquid fund balance converts into the strategy and 100% of new SIP goes "
-             "to the strategy too."
-    )
-    recovery_pct = st.slider(
-        "Recovery above previous ATH to revert (%)", min_value=1, max_value=100, value=20, step=1,
-        help="Stays in full-allocation mode until the strategy's NAV climbs this far above the "
-             "PREVIOUS all-time high (the peak that was being drawn down from) -- not any new "
-             "high made during the recovery itself."
-    )
+    strategy_alloc_pct = 70
+    drawdown_trigger_pct = 15
+    recovery_pct = 20
+    if use_dynamic:
+        strategy_alloc_pct = st.slider(
+            "Normal-mode allocation to strategy (%)", min_value=10, max_value=100, value=70, step=5,
+            help="The rest goes to the liquid fund (LIQUIDBEES). E.g. 70 means Rs 7,000 of a "
+                 "Rs 10,000 SIP goes to the strategy, Rs 3,000 to the liquid fund."
+        )
+        drawdown_trigger_pct = st.slider(
+            "Drawdown that triggers full allocation (%)", min_value=1, max_value=50, value=15, step=1,
+            help="When the strategy's own NAV falls this far below its running all-time high, the "
+                 "entire liquid fund balance converts into the strategy and 100% of new SIP goes "
+                 "to the strategy too."
+        )
+        recovery_pct = st.slider(
+            "Recovery above previous ATH to revert (%)", min_value=1, max_value=100, value=20, step=1,
+            help="Stays in full-allocation mode until the strategy's NAV climbs this far above the "
+                 "PREVIOUS all-time high (the peak that was being drawn down from) -- not any new "
+                 "high made during the recovery itself."
+        )
 
     st.header("Lumpsum on drawdown")
     use_lumpsum = st.checkbox(
@@ -265,9 +277,11 @@ if custom_start_date is not None:
 liquid_rets = liquid_px.pct_change().reindex(strat_rets.index)
 
 plain = simulate_plain_sip(strat_rets, sip_amount)
-dynamic = simulate_dynamic_sip(
-    strat_rets, liquid_rets, sip_amount, strategy_alloc_pct, drawdown_trigger_pct, recovery_pct
-)
+dynamic = None
+if use_dynamic:
+    dynamic = simulate_dynamic_sip(
+        strat_rets, liquid_rets, sip_amount, strategy_alloc_pct, drawdown_trigger_pct, recovery_pct
+    )
 lumpsum = None
 if use_lumpsum:
     lumpsum = simulate_lumpsum_on_drawdown(strat_rets, lumpsum_amount, lumpsum_drawdown_pct, lumpsum_reset_pct)
@@ -293,15 +307,18 @@ def fmt_pct(x: float) -> str:
 
 
 st.subheader("Results")
-cols = st.columns(4)
+cols = st.columns(3 if use_dynamic else 2)
 cols[0].metric("Total invested", fmt_rs(plain["total_invested"]))
 cols[1].metric("Plain SIP final value", fmt_rs(plain["final_value"]), delta=fmt_pct(plain["xirr"]) + " XIRR")
-cols[2].metric("Dynamic SIP final value", fmt_rs(dynamic["final_value"]), delta=fmt_pct(dynamic["xirr"]) + " XIRR")
-diff = dynamic["final_value"] - plain["final_value"]
-cols[3].metric("Dynamic vs Plain", fmt_rs(diff), delta=f"{diff / plain['final_value']:.1%}" if plain["final_value"] else None)
+if use_dynamic:
+    cols[2].metric("Dynamic SIP final value", fmt_rs(dynamic["final_value"]), delta=fmt_pct(dynamic["xirr"]) + " XIRR")
+    diff = dynamic["final_value"] - plain["final_value"]
+    st.caption(
+        f"Dynamic vs Plain: {fmt_rs(diff)} ({diff / plain['final_value']:.1%})" if plain["final_value"] else ""
+    )
 
 if fund_sip is not None:
-    fcols = st.columns(3)
+    fcols = st.columns(3 if use_dynamic else 2)
     fcols[0].metric(
         f"{compare_fund}: SIP final value", fmt_rs(fund_sip["final_value"]),
         delta=fmt_pct(fund_sip["xirr"]) + " XIRR",
@@ -311,22 +328,24 @@ if fund_sip is not None:
         "Plain SIP vs Fund", fmt_rs(diff_plain_fund),
         delta=f"{diff_plain_fund / fund_sip['final_value']:.1%}" if fund_sip["final_value"] else None,
     )
-    diff_dynamic_fund = dynamic["final_value"] - fund_sip["final_value"]
-    fcols[2].metric(
-        "Dynamic SIP vs Fund", fmt_rs(diff_dynamic_fund),
-        delta=f"{diff_dynamic_fund / fund_sip['final_value']:.1%}" if fund_sip["final_value"] else None,
-    )
+    if use_dynamic:
+        diff_dynamic_fund = dynamic["final_value"] - fund_sip["final_value"]
+        fcols[2].metric(
+            "Dynamic SIP vs Fund", fmt_rs(diff_dynamic_fund),
+            delta=f"{diff_dynamic_fund / fund_sip['final_value']:.1%}" if fund_sip["final_value"] else None,
+        )
     st.caption(
         f"{compare_fund} SIP invested Rs {fund_sip['total_invested']:,.0f} over "
         f"{len(fund_sip['value'])} months (its own window -- starts later than the strategy's "
         f"if the fund's history is shorter)."
     )
 
-st.caption(
-    f"Dynamic mode spent {(dynamic['state'] == 'aggressive').sum()} of {len(dynamic['state'])} months "
-    f"in full-allocation mode, across {len(dynamic['transitions']) // 2} trigger/recovery cycle(s) "
-    f"(a cycle may be incomplete if still in aggressive mode at the end of the backtest)."
-)
+if use_dynamic:
+    st.caption(
+        f"Dynamic mode spent {(dynamic['state'] == 'aggressive').sum()} of {len(dynamic['state'])} months "
+        f"in full-allocation mode, across {len(dynamic['transitions']) // 2} trigger/recovery cycle(s) "
+        f"(a cycle may be incomplete if still in aggressive mode at the end of the backtest)."
+    )
 
 if leverage_result is not None:
     with st.expander(f"MTF leverage overlay: {leverage_result['n_tranches']} tranche(s) triggered"):
@@ -356,7 +375,8 @@ fig = go.Figure()
 fig.add_trace(go.Scatter(x=plain["invested"].index, y=plain["invested"].values,
                           name="Total invested", line=dict(dash="dot", color="gray")))
 fig.add_trace(go.Scatter(x=plain["value"].index, y=plain["value"].values, name="Plain SIP"))
-fig.add_trace(go.Scatter(x=dynamic["value"].index, y=dynamic["value"].values, name="Dynamic SIP"))
+if use_dynamic:
+    fig.add_trace(go.Scatter(x=dynamic["value"].index, y=dynamic["value"].values, name="Dynamic SIP"))
 if fund_sip is not None:
     fig.add_trace(go.Scatter(
         x=fund_sip["value"].index, y=fund_sip["value"].values,
@@ -373,18 +393,23 @@ st.subheader("Drawdown")
 strat_cum = (1 + strat_rets).cumprod()
 strat_dd = strat_cum / strat_cum.cummax() - 1
 plain_value_dd = plain["value"] / plain["value"].cummax() - 1
-dynamic_value_dd = dynamic["value"] / dynamic["value"].cummax() - 1
+
+dynamic_value_dd = None
+if use_dynamic:
+    dynamic_value_dd = dynamic["value"] / dynamic["value"].cummax() - 1
 
 fund_value_dd = None
 if fund_sip is not None:
     fund_value_dd = fund_sip["value"] / fund_sip["value"].cummax() - 1
 
-dd_cols = st.columns(4 if fund_sip is not None else 3)
-dd_cols[0].metric("Strategy NAV max drawdown", fmt_pct(strat_dd.min()))
-dd_cols[1].metric("Plain SIP portfolio max drawdown", fmt_pct(plain_value_dd.min()))
-dd_cols[2].metric("Dynamic SIP portfolio max drawdown", fmt_pct(dynamic_value_dd.min()))
+dd_items = [("Strategy NAV max drawdown", strat_dd.min()), ("Plain SIP portfolio max drawdown", plain_value_dd.min())]
+if use_dynamic:
+    dd_items.append(("Dynamic SIP portfolio max drawdown", dynamic_value_dd.min()))
 if fund_sip is not None:
-    dd_cols[3].metric(f"{compare_fund} SIP max drawdown", fmt_pct(fund_value_dd.min()))
+    dd_items.append((f"{compare_fund} SIP max drawdown", fund_value_dd.min()))
+dd_cols = st.columns(len(dd_items))
+for col, (label, value) in zip(dd_cols, dd_items):
+    col.metric(label, fmt_pct(value))
 st.caption(
     "Strategy NAV drawdown is the underlying strategy's own price-based drawdown (what "
     "drives the dynamic mode's trigger, dashed line below). Portfolio drawdown is each SIP's "
@@ -399,10 +424,11 @@ st.caption(
 
 fig_dd1 = go.Figure()
 fig_dd1.add_trace(go.Scatter(x=strat_dd.index, y=strat_dd.values, name="Strategy NAV drawdown", fill="tozeroy"))
-fig_dd1.add_hline(
-    y=-drawdown_trigger_pct / 100, line_dash="dash", line_color="red",
-    annotation_text=f"trigger ({-drawdown_trigger_pct}%)", annotation_position="bottom right",
-)
+if use_dynamic:
+    fig_dd1.add_hline(
+        y=-drawdown_trigger_pct / 100, line_dash="dash", line_color="red",
+        annotation_text=f"trigger ({-drawdown_trigger_pct}%)", annotation_position="bottom right",
+    )
 fig_dd1.update_layout(
     yaxis_tickformat=".0%", yaxis_title="Drawdown",
     margin=dict(t=30, l=10, r=10, b=10), height=300,
@@ -411,7 +437,8 @@ st.plotly_chart(fig_dd1, use_container_width=True)
 
 fig_dd2 = go.Figure()
 fig_dd2.add_trace(go.Scatter(x=plain_value_dd.index, y=plain_value_dd.values, name="Plain SIP"))
-fig_dd2.add_trace(go.Scatter(x=dynamic_value_dd.index, y=dynamic_value_dd.values, name="Dynamic SIP"))
+if use_dynamic:
+    fig_dd2.add_trace(go.Scatter(x=dynamic_value_dd.index, y=dynamic_value_dd.values, name="Dynamic SIP"))
 if fund_value_dd is not None:
     fig_dd2.add_trace(go.Scatter(x=fund_value_dd.index, y=fund_value_dd.values, name=f"{compare_fund} SIP"))
 fig_dd2.update_layout(
@@ -421,28 +448,29 @@ fig_dd2.update_layout(
 )
 st.plotly_chart(fig_dd2, use_container_width=True)
 
-col_a, col_b = st.columns([1, 1])
-with col_a:
-    st.subheader("Dynamic SIP: strategy vs liquid split")
-    fig2 = go.Figure()
-    fig2.add_trace(go.Scatter(x=dynamic["strategy_value"].index, y=dynamic["strategy_value"].values,
-                               name="In strategy", stackgroup="one"))
-    fig2.add_trace(go.Scatter(x=dynamic["liquid_value"].index, y=dynamic["liquid_value"].values,
-                               name="In liquid fund", stackgroup="one"))
-    fig2.update_layout(
-        yaxis_title="Rs", legend=dict(orientation="h", yanchor="bottom", y=1.02),
-        margin=dict(t=30, l=10, r=10, b=10), height=350,
-    )
-    st.plotly_chart(fig2, use_container_width=True)
+if use_dynamic:
+    col_a, col_b = st.columns([1, 1])
+    with col_a:
+        st.subheader("Dynamic SIP: strategy vs liquid split")
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(x=dynamic["strategy_value"].index, y=dynamic["strategy_value"].values,
+                                   name="In strategy", stackgroup="one"))
+        fig2.add_trace(go.Scatter(x=dynamic["liquid_value"].index, y=dynamic["liquid_value"].values,
+                                   name="In liquid fund", stackgroup="one"))
+        fig2.update_layout(
+            yaxis_title="Rs", legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            margin=dict(t=30, l=10, r=10, b=10), height=350,
+        )
+        st.plotly_chart(fig2, use_container_width=True)
 
-with col_b:
-    st.subheader("Trigger/recovery timeline")
-    if dynamic["transitions"]:
-        tdf = pd.DataFrame(dynamic["transitions"], columns=["Date", "Event"])
-        tdf["Date"] = tdf["Date"].dt.date
-        st.dataframe(tdf, hide_index=True, height=350)
-    else:
-        st.caption("No drawdown large enough to trigger full allocation with these parameters.")
+    with col_b:
+        st.subheader("Trigger/recovery timeline")
+        if dynamic["transitions"]:
+            tdf = pd.DataFrame(dynamic["transitions"], columns=["Date", "Event"])
+            tdf["Date"] = tdf["Date"].dt.date
+            st.dataframe(tdf, hide_index=True, height=350)
+        else:
+            st.caption("No drawdown large enough to trigger full allocation with these parameters.")
 
 if lumpsum is not None:
     st.divider()
@@ -474,12 +502,13 @@ if lumpsum is not None:
 
         st.markdown("**Combined with each SIP mode**")
         combined_plain = plain["value"] + lumpsum["value"]
-        combined_dynamic = dynamic["value"] + lumpsum["value"]
         fig_combined = go.Figure()
         fig_combined.add_trace(go.Scatter(x=plain["value"].index, y=plain["value"].values, name="Plain SIP alone"))
         fig_combined.add_trace(go.Scatter(x=combined_plain.index, y=combined_plain.values, name="Plain SIP + Lumpsum"))
-        fig_combined.add_trace(go.Scatter(x=dynamic["value"].index, y=dynamic["value"].values, name="Dynamic SIP alone"))
-        fig_combined.add_trace(go.Scatter(x=combined_dynamic.index, y=combined_dynamic.values, name="Dynamic SIP + Lumpsum"))
+        if use_dynamic:
+            combined_dynamic = dynamic["value"] + lumpsum["value"]
+            fig_combined.add_trace(go.Scatter(x=dynamic["value"].index, y=dynamic["value"].values, name="Dynamic SIP alone"))
+            fig_combined.add_trace(go.Scatter(x=combined_dynamic.index, y=combined_dynamic.values, name="Dynamic SIP + Lumpsum"))
         fig_combined.update_layout(
             yaxis_type="log", yaxis_title="Portfolio value (Rs, log scale)",
             legend=dict(orientation="h", yanchor="bottom", y=1.02),
@@ -487,9 +516,10 @@ if lumpsum is not None:
         )
         st.plotly_chart(fig_combined, use_container_width=True)
 
-        col_c, col_d = st.columns(2)
-        col_c.metric("Plain SIP + Lumpsum final value", fmt_rs(combined_plain.iloc[-1]))
-        col_d.metric("Dynamic SIP + Lumpsum final value", fmt_rs(combined_dynamic.iloc[-1]))
+        combined_cols = st.columns(2 if use_dynamic else 1)
+        combined_cols[0].metric("Plain SIP + Lumpsum final value", fmt_rs(combined_plain.iloc[-1]))
+        if use_dynamic:
+            combined_cols[1].metric("Dynamic SIP + Lumpsum final value", fmt_rs(combined_dynamic.iloc[-1]))
 
         with st.expander("Lumpsum trigger dates"):
             trig_df = pd.DataFrame(lumpsum["triggers"], columns=["Date", "Detail"])
