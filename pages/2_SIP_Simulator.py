@@ -11,18 +11,31 @@ Optionally overlays two-stage MTF leverage (see leverage_engine.py) on the
 underlying strategy's own returns, applied BEFORE all of the above -- so
 Plain SIP, Dynamic SIP, and the Lumpsum sleeve all reflect it uniformly
 when enabled.
+
+Optionally also runs the SAME plain SIP mechanics into one curated Direct
+Growth mutual fund scheme (see backtest_engine.MUTUAL_FUNDS), shown
+alongside Plain/Dynamic SIP for reference -- a hand-picked list, not
+exhaustive or AUM-ranked.
 """
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from backtest_engine import NSE_UNIVERSES, apply_execution_lag, ensure_stock_data, run_backtest
+from backtest_engine import (
+    MUTUAL_FUNDS,
+    NSE_UNIVERSES,
+    apply_execution_lag,
+    ensure_mutual_fund_data,
+    ensure_stock_data,
+    run_backtest,
+)
 from leverage_engine import apply_mtf_leverage
 from sip_engine import simulate_dynamic_sip, simulate_lumpsum_on_drawdown, simulate_plain_sip
 from streamlit_cache import (
     cached_load_daily_prices,
     cached_load_liquid,
     cached_load_membership,
+    cached_load_mutual_fund_nav,
     cached_load_prices,
     cached_load_universe_symbols,
 )
@@ -31,6 +44,7 @@ st.set_page_config(page_title="Nifty 500 SIP Simulator", layout="wide")
 
 with st.spinner("Fetching price data (first run only)..."):
     ensure_stock_data()
+    ensure_mutual_fund_data()
 
 st.title("SIP Simulator")
 st.caption(
@@ -189,6 +203,19 @@ with st.sidebar:
                  "before it's willing to fire on the next dip."
         )
 
+    st.header("Compare against a mutual fund")
+    fund_choice = st.selectbox(
+        "Mutual fund (optional)", ["None"] + list(MUTUAL_FUNDS.keys()),
+        format_func=lambda n: n if n == "None" else f"[{MUTUAL_FUNDS[n]['category']}] {n}",
+        help="Runs the SAME plain monthly SIP (same amount, same cadence) into one Direct "
+             "Growth mutual fund scheme instead of the strategy, shown alongside Plain/Dynamic "
+             "SIP for reference. A hand-picked list of well-known funds (not exhaustive or "
+             "AUM-ranked), Direct Growth only (not Regular, which carries distributor "
+             "commission drag). Source: api.mfapi.in. If the fund's history is shorter than the "
+             "comparison window, its SIP simply starts later."
+    )
+    compare_fund = fund_choice if fund_choice != "None" else None
+
 monthly_prices = cached_load_prices(price_col)
 membership = None
 if use_membership_filter:
@@ -245,6 +272,17 @@ lumpsum = None
 if use_lumpsum:
     lumpsum = simulate_lumpsum_on_drawdown(strat_rets, lumpsum_amount, lumpsum_drawdown_pct, lumpsum_reset_pct)
 
+fund_sip = None
+if compare_fund is not None:
+    fund_nav = cached_load_mutual_fund_nav(compare_fund).resample("ME").last()
+    fund_rets = fund_nav.pct_change().dropna()
+    if custom_start_date is not None:
+        fund_rets = fund_rets[fund_rets.index >= pd.Timestamp(custom_start_date)]
+    if len(fund_rets) > 1:
+        fund_sip = simulate_plain_sip(fund_rets, sip_amount)
+    else:
+        st.sidebar.warning(f"{compare_fund}: no data in the selected window.")
+
 
 def fmt_rs(x: float) -> str:
     return f"Rs {x:,.0f}"
@@ -261,6 +299,28 @@ cols[1].metric("Plain SIP final value", fmt_rs(plain["final_value"]), delta=fmt_
 cols[2].metric("Dynamic SIP final value", fmt_rs(dynamic["final_value"]), delta=fmt_pct(dynamic["xirr"]) + " XIRR")
 diff = dynamic["final_value"] - plain["final_value"]
 cols[3].metric("Dynamic vs Plain", fmt_rs(diff), delta=f"{diff / plain['final_value']:.1%}" if plain["final_value"] else None)
+
+if fund_sip is not None:
+    fcols = st.columns(3)
+    fcols[0].metric(
+        f"{compare_fund}: SIP final value", fmt_rs(fund_sip["final_value"]),
+        delta=fmt_pct(fund_sip["xirr"]) + " XIRR",
+    )
+    diff_plain_fund = plain["final_value"] - fund_sip["final_value"]
+    fcols[1].metric(
+        "Plain SIP vs Fund", fmt_rs(diff_plain_fund),
+        delta=f"{diff_plain_fund / fund_sip['final_value']:.1%}" if fund_sip["final_value"] else None,
+    )
+    diff_dynamic_fund = dynamic["final_value"] - fund_sip["final_value"]
+    fcols[2].metric(
+        "Dynamic SIP vs Fund", fmt_rs(diff_dynamic_fund),
+        delta=f"{diff_dynamic_fund / fund_sip['final_value']:.1%}" if fund_sip["final_value"] else None,
+    )
+    st.caption(
+        f"{compare_fund} SIP invested Rs {fund_sip['total_invested']:,.0f} over "
+        f"{len(fund_sip['value'])} months (its own window -- starts later than the strategy's "
+        f"if the fund's history is shorter)."
+    )
 
 st.caption(
     f"Dynamic mode spent {(dynamic['state'] == 'aggressive').sum()} of {len(dynamic['state'])} months "
@@ -297,6 +357,11 @@ fig.add_trace(go.Scatter(x=plain["invested"].index, y=plain["invested"].values,
                           name="Total invested", line=dict(dash="dot", color="gray")))
 fig.add_trace(go.Scatter(x=plain["value"].index, y=plain["value"].values, name="Plain SIP"))
 fig.add_trace(go.Scatter(x=dynamic["value"].index, y=dynamic["value"].values, name="Dynamic SIP"))
+if fund_sip is not None:
+    fig.add_trace(go.Scatter(
+        x=fund_sip["value"].index, y=fund_sip["value"].values,
+        name=f"{compare_fund} SIP", line=dict(dash="dashdot"),
+    ))
 fig.update_layout(
     yaxis_type="log", yaxis_title="Portfolio value (Rs, log scale)",
     legend=dict(orientation="h", yanchor="bottom", y=1.02),
@@ -310,10 +375,16 @@ strat_dd = strat_cum / strat_cum.cummax() - 1
 plain_value_dd = plain["value"] / plain["value"].cummax() - 1
 dynamic_value_dd = dynamic["value"] / dynamic["value"].cummax() - 1
 
-dd_cols = st.columns(3)
+fund_value_dd = None
+if fund_sip is not None:
+    fund_value_dd = fund_sip["value"] / fund_sip["value"].cummax() - 1
+
+dd_cols = st.columns(4 if fund_sip is not None else 3)
 dd_cols[0].metric("Strategy NAV max drawdown", fmt_pct(strat_dd.min()))
 dd_cols[1].metric("Plain SIP portfolio max drawdown", fmt_pct(plain_value_dd.min()))
 dd_cols[2].metric("Dynamic SIP portfolio max drawdown", fmt_pct(dynamic_value_dd.min()))
+if fund_sip is not None:
+    dd_cols[3].metric(f"{compare_fund} SIP max drawdown", fmt_pct(fund_value_dd.min()))
 st.caption(
     "Strategy NAV drawdown is the underlying strategy's own price-based drawdown (what "
     "drives the dynamic mode's trigger, dashed line below). Portfolio drawdown is each SIP's "
@@ -341,6 +412,8 @@ st.plotly_chart(fig_dd1, use_container_width=True)
 fig_dd2 = go.Figure()
 fig_dd2.add_trace(go.Scatter(x=plain_value_dd.index, y=plain_value_dd.values, name="Plain SIP"))
 fig_dd2.add_trace(go.Scatter(x=dynamic_value_dd.index, y=dynamic_value_dd.values, name="Dynamic SIP"))
+if fund_value_dd is not None:
+    fig_dd2.add_trace(go.Scatter(x=fund_value_dd.index, y=fund_value_dd.values, name=f"{compare_fund} SIP"))
 fig_dd2.update_layout(
     yaxis_tickformat=".0%", yaxis_title="Portfolio value drawdown",
     legend=dict(orientation="h", yanchor="bottom", y=1.02),
