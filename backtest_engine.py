@@ -1059,6 +1059,15 @@ def perf_stats(rets: pd.Series, freq: int = 12) -> dict:
     }
 
 
+def _round_half_up(x: float) -> int:
+    """Round-half-up (0.5 rounds to 1, not Python's round-half-to-even) --
+    used for share quantities, since a real trader can't buy a fractional
+    share and "round to even" would be a strange, unexplainable rule for
+    a quantity a user is looking at directly in a trade log."""
+    import math
+    return math.floor(x + 0.5)
+
+
 def build_trade_log(
     monthly_prices: pd.DataFrame,
     strat_rets: pd.Series,
@@ -1076,7 +1085,12 @@ def build_trade_log(
     (see run_backtest) generated the return curve: even under "equal_monthly"
     weighting, a real trader can't literally re-buy/re-sell fractional
     amounts every month for free, so a trade log has to describe discrete
-    orders. Position sizing uses the GROSS (pre-cost, pre-tax) equity curve,
+    orders -- qty is additionally rounded to the nearest whole share
+    (round-half-up, so 100.5 becomes 101, see _round_half_up) for the
+    same reason: a trader can't buy 0.5 of a share either. pnl_rs/
+    pnl_pct are computed from this rounded qty, so they reflect what a
+    real position would have actually earned, not the unrounded
+    theoretical sizing. Position sizing uses the GROSS (pre-cost, pre-tax) equity curve,
     independent of tax_cost_engine.py -- this is a plain summary of what the
     strategy did, not a costed simulation.
 
@@ -1105,7 +1119,7 @@ def build_trade_log(
             if exit_price is None or pd.isna(exit_price):
                 continue
             position_value = (entry_nav / entry_n_active) * capital_base_rs
-            qty = position_value / entry_price
+            qty = _round_half_up(position_value / entry_price)
             trades.append({
                 "symbol": sym, "entry_date": entry_date, "entry_price": entry_price,
                 "exit_date": date, "exit_price": exit_price, "qty": qty,
@@ -1129,7 +1143,7 @@ def build_trade_log(
             continue
         last_price = px_series.iloc[-1]
         position_value = (entry_nav / entry_n_active) * capital_base_rs
-        qty = position_value / entry_price
+        qty = _round_half_up(position_value / entry_price)
         trades.append({
             "symbol": sym, "entry_date": entry_date, "entry_price": entry_price,
             "exit_date": pd.NaT, "exit_price": last_price, "qty": qty,

@@ -164,13 +164,16 @@ with st.sidebar:
         )
 
     use_execution_lag = st.checkbox(
-        f"T+1 execution (signal at {period_word}-end close, trade at next open)", value=False,
-        help=f"Realistic execution timing: the rebalance ranking is still computed from the "
-             f"{period_word}-end close (unchanged), but entries and exits are executed on the "
-             "NEXT trading day. A stock being dropped is held (and keeps accruing return) through "
-             "that next day's open, where it's sold; a stock being added is bought at that "
-             "open, so it only starts accruing return from there. Stocks that stay held across "
-             "a rebalance are unaffected. Requires daily price data (a bit slower to compute)."
+        f"T+1 execution (signal at {period_word}-end close, trade at next open ~9:15 AM)", value=True,
+        help=f"Realistic execution timing, ON by default: the rebalance ranking is still "
+             f"computed from the {period_word}-end close (unchanged), but entries and exits are "
+             "executed on the NEXT trading day's open -- NSE's market open, ~9:15 AM (this "
+             "backtest uses daily bars, not intraday, so Open is the stand-in for a 9:15 AM "
+             "fill). A stock being dropped is held (and keeps accruing return) "
+             "through that next day's open, where it's sold; a stock being added is bought at "
+             "that open, so it only starts accruing return from there. Stocks that stay held "
+             "across a rebalance are unaffected. Requires daily price data (a bit slower to "
+             "compute). Turn off to instead fill everything at the same close used for ranking."
     )
     if use_stoploss and use_execution_lag:
         st.caption(
