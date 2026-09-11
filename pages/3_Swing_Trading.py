@@ -29,6 +29,15 @@ instead of holding a rebalanced basket. Five strategy families:
     full_ohlc and scripts/download_upstox_30min_data.py.
 See swing_engine.py for the full mechanics and the design assumptions
 made where the source spec was ambiguous.
+
+Position sizing (all five strategies) is either fixed capital throughout
+(sizes every new position off the original starting capital, regardless
+of how the account has actually grown or shrunk -- the long-standing
+default) or compounding in steps (sizing capital ratchets UP by a
+configurable % every time mark-to-market equity reaches another such
+step, never back down on a drawdown) -- see the "Position sizing"
+sidebar section and each run_*_backtest's capital_mode/compound_step_pct
+parameters.
 """
 import pandas as pd
 import plotly.graph_objects as go
@@ -442,9 +451,10 @@ with st.sidebar:
         capital_base = st.number_input("Starting capital (Rs)", min_value=100_000.0, value=1_000_000.0, step=100_000.0)
         position_pct = st.slider(
             "Position size (% of capital per stock)", min_value=1.0, max_value=100.0, value=5.0, step=0.5,
-            help="A FIXED % of starting capital allocated to every entry (not risk-based). Every "
-                 "re-entry within a month sizes off this same starting capital, not fluctuating "
-                 "equity, and is capped by available cash."
+            help="A FIXED % of capital allocated to every entry (not risk-based). Every re-entry "
+                 "within a month sizes off the same capital figure -- starting capital, or the "
+                 "current compounded step if Position sizing below is set to compound -- and is "
+                 "capped by available cash."
         )
         risk_pct, max_position_pct, risk_reward_ratio, max_entries = 1.0, 20.0, 2.0, 10  # unused, kept defined
     else:
@@ -465,6 +475,26 @@ with st.sidebar:
                  "sizing can demand a huge position when the stop is tight -- e.g. a 1% stop distance "
                  "needs a position worth 100% of capital just to risk 1%. This cap (not risk_pct) is "
                  "usually what actually determines position size on tight-stop setups."
+        )
+
+    st.header("Position sizing")
+    capital_mode_label = st.radio(
+        "Capital used for sizing new positions", ["Fixed capital throughout (default)", "Compound in steps"],
+        index=0,
+        help="Fixed: every new position is always sized off the ORIGINAL starting capital, no "
+             "matter how much the account has actually grown or shrunk -- what this page has "
+             "always done. Compound in steps: sizing capital ratchets UP by a fixed % every time "
+             "mark-to-market equity reaches another such step (e.g. 10L start, 50% steps -> once "
+             "equity hits 15L, new positions size off 15L; once it hits 22.5L, off 22.5L; and so "
+             "on). Only ratchets up -- a later drawdown below a step does NOT size back down."
+    )
+    capital_mode = "fixed" if capital_mode_label.startswith("Fixed") else "compounding_steps"
+    compound_step_pct = 50.0
+    if capital_mode == "compounding_steps":
+        compound_step_pct = st.slider(
+            "Compounding step (%)", min_value=10.0, max_value=200.0, value=50.0, step=5.0,
+            help="How much mark-to-market equity must grow, from the last step reached, before "
+                 "sizing capital steps up again."
         )
 
 monthly_prices = cached_load_prices(price_col)
@@ -489,6 +519,7 @@ if is_orb:
         lookback_months, skip_months, n_stocks, min_price,
         orb_direction, range_minutes, max_reentries, orb_stop_mode, stop_pct,
         position_pct, capital_base, allowed_symbols=universe_allowed_symbols, min_start_date=min_start_date,
+        capital_mode=capital_mode, compound_step_pct=compound_step_pct,
     )
 elif is_short:
     fno_symbols = cached_load_fno_symbols()
@@ -502,6 +533,7 @@ elif is_short:
                 lookback_months, skip_months, n_stocks, min_price,
                 ema_fast, ema_slow, max_entries, min_stop_pct, capital_base,
                 use_target, risk_reward_ratio, allowed_symbols=universe_allowed_symbols, min_start_date=min_start_date,
+                capital_mode=capital_mode, compound_step_pct=compound_step_pct,
             )
     else:
         with st.spinner("Running Short Momentum backtest (hourly bars, ~2-3 year window)..."):
@@ -511,6 +543,7 @@ elif is_short:
                 lookback_months, skip_months, n_stocks, min_price,
                 ema_fast, ema_slow, max_entries, min_stop_pct, capital_base,
                 use_target, risk_reward_ratio, allowed_symbols=universe_allowed_symbols, min_start_date=min_start_date,
+                capital_mode=capital_mode, compound_step_pct=compound_step_pct,
             )
 elif is_ema:
     if timeframe.startswith("Hourly (Yahoo"):
@@ -523,6 +556,7 @@ elif is_ema:
                 lookback_months, skip_months, n_stocks, min_price,
                 ema_fast, ema_slow, risk_pct, max_position_pct, min_stop_pct, capital_base,
                 allowed_symbols=universe_allowed_symbols, min_start_date=min_start_date,
+                capital_mode=capital_mode, compound_step_pct=compound_step_pct,
             )
     elif timeframe.startswith("Hourly (Upstox"):
         with st.spinner("Fetching 30-minute price data (first run only)..."):
@@ -534,6 +568,7 @@ elif is_ema:
                 lookback_months, skip_months, n_stocks, min_price,
                 ema_fast, ema_slow, risk_pct, max_position_pct, min_stop_pct, capital_base,
                 allowed_symbols=universe_allowed_symbols, min_start_date=min_start_date,
+                capital_mode=capital_mode, compound_step_pct=compound_step_pct,
             )
     else:
         with st.spinner("Running EMA crossover backtest (daily bars, full history)..."):
@@ -543,6 +578,7 @@ elif is_ema:
                 lookback_months, skip_months, n_stocks, min_price,
                 ema_fast, ema_slow, risk_pct, max_position_pct, min_stop_pct, capital_base,
                 allowed_symbols=universe_allowed_symbols, min_start_date=min_start_date,
+                capital_mode=capital_mode, compound_step_pct=compound_step_pct,
             )
 elif is_rsi:
     if timeframe.startswith("15 Min"):
@@ -565,6 +601,7 @@ elif is_rsi:
         lookback_months, skip_months, n_stocks, min_price,
         rsi_period, rsi_threshold, risk_reward_ratio, max_hold_days, max_stop_pct, min_stop_pct,
         risk_pct, max_position_pct, capital_base, allowed_symbols=universe_allowed_symbols, min_start_date=min_start_date,
+        capital_mode=capital_mode, compound_step_pct=compound_step_pct,
     )
 else:
     daily_open, daily_high, daily_low, daily_close = cached_load_daily_ohlc()
@@ -576,6 +613,7 @@ else:
             exit_mode, exit_lookback_days, stop_pct,
             risk_pct, risk_reward_ratio, max_position_pct, capital_base,
             allowed_symbols=universe_allowed_symbols, min_start_date=min_start_date,
+            capital_mode=capital_mode, compound_step_pct=compound_step_pct,
         )
 
 trades = result["trades"]
@@ -586,6 +624,19 @@ if min_start_date is not None and not trades.empty:
         f"Showing results as if this strategy started trading on **{min_start_date.date()}** "
         f"({len(trades)} trades since). Momentum ranking still uses real price history from "
         "before this date."
+    )
+
+if capital_mode == "compounding_steps" and not equity.empty:
+    n_steps = 0
+    sc, mult = capital_base, 1 + compound_step_pct / 100.0
+    for mtm in equity.values:
+        while mtm >= sc * mult:
+            sc *= mult
+            n_steps += 1
+    st.info(
+        f"Position sizing compounded in **{compound_step_pct:.0f}% steps** -- capital used for "
+        f"new positions stepped up {n_steps} time(s) over the backtest, from "
+        f"Rs {capital_base:,.0f} to Rs {sc:,.0f}. Only ratchets up, never back down on a drawdown."
     )
 
 if trades.empty or equity.empty:

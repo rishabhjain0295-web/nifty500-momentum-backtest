@@ -143,6 +143,8 @@ def run_swing_backtest(
     capital_base: float = 1_000_000.0,
     allowed_symbols: set[str] | None = None,
     min_start_date: pd.Timestamp | None = None,
+    capital_mode: str = "fixed",
+    compound_step_pct: float = 50.0,
 ) -> dict:
     # 1. universe calendar: top n_stocks at each monthly rebalance
     universe_by_period = _build_universe_calendar(
@@ -181,6 +183,7 @@ def run_swing_backtest(
         trailing_exit_low = daily_low.rolling(exit_lookback_days).min().shift(1)
 
     cash = capital_base
+    sizing_capital = capital_base  # only diverges from capital_base when capital_mode="compounding_steps"
     positions: dict[str, dict] = {}  # symbol -> entry_date, entry_price, qty, stop_price(initial), target_price
     trades: list[dict] = []
     equity_series = pd.Series(index=trading_days, dtype=float)
@@ -264,8 +267,8 @@ def run_swing_backtest(
                 continue  # can't size a trade with zero/negative/undefined risk
 
             risk_per_share = entry_price - initial_stop
-            risk_amount = capital_base * risk_pct / 100.0
-            max_position_value = capital_base * max_position_pct / 100.0
+            risk_amount = sizing_capital * risk_pct / 100.0
+            max_position_value = sizing_capital * max_position_pct / 100.0
             qty = risk_amount / risk_per_share
             qty = min(qty, max_position_value / entry_price, cash / entry_price)
             if qty <= 0:
@@ -285,6 +288,10 @@ def run_swing_backtest(
             px = daily_close.at[day, sym] if sym in daily_close.columns and day in daily_close.index else np.nan
             mtm += pos["qty"] * (px if pd.notna(px) else pos["entry_price"])
         equity_series.at[day] = mtm
+        if capital_mode == "compounding_steps":
+            step_mult = 1 + compound_step_pct / 100.0
+            while mtm >= sizing_capital * step_mult:
+                sizing_capital *= step_mult
 
     # still-open positions at the end -> unrealized, included in the trade log
     for sym, pos in positions.items():
@@ -332,6 +339,8 @@ def run_ema_crossover_backtest(
     capital_base: float = 1_000_000.0,
     allowed_symbols: set[str] | None = None,
     min_start_date: pd.Timestamp | None = None,
+    capital_mode: str = "fixed",
+    compound_step_pct: float = 50.0,
 ) -> dict:
     """EMA(ema_fast)/EMA(ema_slow) crossover swing strategy. Timeframe-
     agnostic -- pass daily bars or hourly bars via bar_open/bar_close and
@@ -417,6 +426,7 @@ def run_ema_crossover_backtest(
     ridx_of_bar = dict(zip(bars, rebalance_dates.searchsorted(bar_month_starts, side="right") - 1))
 
     cash = capital_base
+    sizing_capital = capital_base  # only diverges from capital_base when capital_mode="compounding_steps"
     positions: dict[str, dict] = {}
     trades: list[dict] = []
     equity_series = pd.Series(index=bars, dtype=float)
@@ -456,8 +466,8 @@ def run_ema_crossover_backtest(
             if pd.isna(open_px) or open_px <= 0 or initial_stop >= open_px:
                 continue
             risk_per_share = max(open_px - initial_stop, open_px * min_stop_pct / 100.0)
-            risk_amount = capital_base * risk_pct / 100.0
-            max_position_value = capital_base * max_position_pct / 100.0
+            risk_amount = sizing_capital * risk_pct / 100.0
+            max_position_value = sizing_capital * max_position_pct / 100.0
             qty = min(risk_amount / risk_per_share, max_position_value / open_px, cash / open_px)
             # Skip economically negligible fills: with no cap on concurrent positions here
             # (unlike Short Momentum's max_entries), enough simultaneous winners can exhaust
@@ -465,7 +475,7 @@ def run_ema_crossover_backtest(
             # a real position, but too small to mean anything, and its risked_rs (~qty x
             # risk_per_share) would be near-zero too, right back to the r_multiple blowup
             # min_stop_pct alone doesn't fully prevent. Better to just not take the trade.
-            if qty * open_px < capital_base * 0.001:
+            if qty * open_px < sizing_capital * 0.001:
                 continue
             cash -= qty * open_px
             positions[sym] = {
@@ -505,6 +515,10 @@ def run_ema_crossover_backtest(
             px = bar_close.at[bar, sym] if sym in bar_close.columns and bar in bar_close.index else np.nan
             mtm += pos["qty"] * (px if pd.notna(px) else pos["entry_price"])
         equity_series.at[bar] = mtm
+        if capital_mode == "compounding_steps":
+            step_mult = 1 + compound_step_pct / 100.0
+            while mtm >= sizing_capital * step_mult:
+                sizing_capital *= step_mult
 
     # still-open positions -> unrealized
     for sym, pos in positions.items():
@@ -553,6 +567,8 @@ def run_short_ema_crossover_backtest(
     risk_reward_ratio: float = 2.0,
     allowed_symbols: set[str] | None = None,
     min_start_date: pd.Timestamp | None = None,
+    capital_mode: str = "fixed",
+    compound_step_pct: float = 50.0,
 ) -> dict:
     """Short Momentum (F&O): the mirror image of run_ema_crossover_backtest,
     short-selling the WEAKEST momentum stocks within the F&O-eligible
@@ -608,12 +624,17 @@ def run_short_ema_crossover_backtest(
     original pure trend-following behavior (ride until a stop condition
     fires, no fixed exit).
 
-    Position sizing: EQUAL notional per slot (capital_base / max_entries),
+    Position sizing: EQUAL notional per slot (sizing_capital / max_entries),
     not risk-based -- the spec here gives a capital figure and a slot count
     rather than a risk %, so each of the up to max_entries concurrent
-    shorts gets a fixed capital_base / max_entries of notional, sized off
-    entry price. risked_rs (distance from entry to the initial ema_slow
-    stop) is still recorded per trade for R-multiple reporting, it just
+    shorts gets a fixed sizing_capital / max_entries of notional, sized off
+    entry price. sizing_capital is capital_base itself unless capital_mode=
+    "compounding_steps", in which case it ratchets up by compound_step_pct%
+    every time mark-to-market equity reaches another such step (identical
+    stepping logic repeated in all five run_*_backtest functions in this
+    module -- never steps back down on a drawdown). risked_rs (distance
+    from entry to the initial ema_slow stop) is still recorded per trade
+    for R-multiple reporting, it just
     isn't what determines qty here.
 
     min_stop_pct floors that reporting distance at min_stop_pct% of entry
@@ -663,7 +684,6 @@ def run_short_ema_crossover_backtest(
 
     ema_fast_series = bar_close.ewm(span=ema_fast, adjust=False).mean()
     ema_slow_series = bar_close.ewm(span=ema_slow, adjust=False).mean()
-    notional_per_slot = capital_base / max_entries
 
     # Bar -> period-index mapping, normalized to each bar's own month-start
     # before the searchsorted lookup -- see run_orb_backtest's comment on
@@ -673,6 +693,7 @@ def run_short_ema_crossover_backtest(
     ridx_of_bar = dict(zip(bars, rebalance_dates.searchsorted(bar_month_starts, side="right") - 1))
 
     cash = capital_base
+    sizing_capital = capital_base  # only diverges from capital_base when capital_mode="compounding_steps"
     positions: dict[str, dict] = {}
     trades: list[dict] = []
     equity_series = pd.Series(index=bars, dtype=float)
@@ -723,6 +744,7 @@ def run_short_ema_crossover_backtest(
             open_px = bar_open.at[bar, sym]
             if pd.isna(open_px) or open_px <= 0 or initial_stop <= open_px:
                 continue
+            notional_per_slot = sizing_capital / max_entries
             qty = notional_per_slot / open_px
             risk_per_share = max(initial_stop - open_px, open_px * min_stop_pct / 100.0)
             cash += qty * open_px  # short-sale proceeds
@@ -771,6 +793,10 @@ def run_short_ema_crossover_backtest(
             px = bar_close.at[bar, sym] if sym in bar_close.columns and bar in bar_close.index else np.nan
             mtm -= pos["qty"] * (px if pd.notna(px) else pos["entry_price"])
         equity_series.at[bar] = mtm
+        if capital_mode == "compounding_steps":
+            step_mult = 1 + compound_step_pct / 100.0
+            while mtm >= sizing_capital * step_mult:
+                sizing_capital *= step_mult
 
     # still-open positions -> unrealized
     for sym, pos in positions.items():
@@ -858,6 +884,8 @@ def run_orb_backtest(
     capital_base: float = 1_000_000.0,
     allowed_symbols: set[str] | None = None,
     min_start_date: pd.Timestamp | None = None,
+    capital_mode: str = "fixed",
+    compound_step_pct: float = 50.0,
 ) -> dict:
     """Opening Range Breakout (ORB), long or short (direction="long" or
     "short"), on hourly bars. Universe: for direction="long", the TOP
@@ -914,10 +942,14 @@ def run_orb_backtest(
     bar would be a pointless zero-duration trade. No position ever
     carries across a month boundary.
 
-    Position sizing: a FIXED position_pct of capital_base per trade
+    Position sizing: a FIXED position_pct of sizing_capital per trade
     (e.g. 5%), not risk-based -- matches the spec (a flat % of capital,
     not a per-trade risk %). Capped by available cash. Every re-entry in
-    a month sizes off the same capital_base, not fluctuating equity.
+    a month sizes off the same sizing_capital -- capital_base itself
+    unless capital_mode="compounding_steps", in which case sizing_capital
+    ratchets up by compound_step_pct% every time mark-to-market equity
+    reaches another such step (never back down on a drawdown), so re-
+    entries later in a long backtest can size larger than earlier ones.
 
     Simplification (short direction only): modeled as directly shorting
     the stock at its spot price, same convention and same caveats as
@@ -973,9 +1005,8 @@ def run_orb_backtest(
 
     ranges_by_period = _compute_orb_ranges(bar_high, bar_low, rebalance_dates, universe_by_period, period_bars, range_bars)
 
-    notional_per_trade = capital_base * position_pct / 100.0
-
     cash = capital_base
+    sizing_capital = capital_base  # only diverges from capital_base when capital_mode="compounding_steps"
     positions: dict[str, dict] = {}
     trades: list[dict] = []
     equity_series = pd.Series(index=bars, dtype=float)
@@ -1034,6 +1065,7 @@ def run_orb_backtest(
                 continue
             if not is_long and stop_price <= open_px:
                 continue
+            notional_per_trade = sizing_capital * position_pct / 100.0
             qty = min(notional_per_trade / open_px, cash / open_px)
             if qty <= 0:
                 continue
@@ -1109,6 +1141,10 @@ def run_orb_backtest(
             px = px if pd.notna(px) else pos["entry_price"]
             mtm += pos["qty"] * px if is_long else -pos["qty"] * px
         equity_series.at[bar] = mtm
+        if capital_mode == "compounding_steps":
+            step_mult = 1 + compound_step_pct / 100.0
+            while mtm >= sizing_capital * step_mult:
+                sizing_capital *= step_mult
 
     # still-open positions at the very end of available data -> unrealized
     for sym, pos in positions.items():
@@ -1161,6 +1197,8 @@ def run_rsi_reversal_backtest(
     capital_base: float = 1_000_000.0,
     allowed_symbols: set[str] | None = None,
     min_start_date: pd.Timestamp | None = None,
+    capital_mode: str = "fixed",
+    compound_step_pct: float = 50.0,
 ) -> dict:
     """RSI Oversold Reversal, long only, top-N Nifty 500 momentum universe
     (same as run_ema_crossover_backtest). Timeframe-agnostic -- pass 15m,
@@ -1257,10 +1295,8 @@ def run_rsi_reversal_backtest(
     rsi = rsi.where(avg_loss > 0, 100.0)  # no losses in the window -> RSI = 100, not NaN from a 0/0 rs
     alert_signal = (rsi >= rsi_threshold) & (rsi.shift(1) < rsi_threshold)
 
-    notional_risk_amount = capital_base * risk_pct / 100.0
-    max_position_value = capital_base * max_position_pct / 100.0
-
     cash = capital_base
+    sizing_capital = capital_base  # only diverges from capital_base when capital_mode="compounding_steps"
     positions: dict[str, dict] = {}
     trades: list[dict] = []
     equity_series = pd.Series(index=bars, dtype=float)
@@ -1309,8 +1345,10 @@ def run_rsi_reversal_backtest(
             if stop_pct_actual > max_stop_pct:
                 continue
             risk_per_share = max(raw_risk, open_px * min_stop_pct / 100.0)
+            notional_risk_amount = sizing_capital * risk_pct / 100.0
+            max_position_value = sizing_capital * max_position_pct / 100.0
             qty = min(notional_risk_amount / risk_per_share, max_position_value / open_px, cash / open_px)
-            if qty * open_px < capital_base * 0.001:
+            if qty * open_px < sizing_capital * 0.001:
                 continue
             cash -= qty * open_px
             positions[sym] = {
@@ -1361,6 +1399,10 @@ def run_rsi_reversal_backtest(
             px = px if pd.notna(px) else pos["entry_price"]
             mtm += pos["qty"] * px
         equity_series.at[bar] = mtm
+        if capital_mode == "compounding_steps":
+            step_mult = 1 + compound_step_pct / 100.0
+            while mtm >= sizing_capital * step_mult:
+                sizing_capital *= step_mult
 
     # still-open positions at the very end of available data -> unrealized
     for sym, pos in positions.items():
