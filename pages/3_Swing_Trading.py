@@ -13,7 +13,8 @@ instead of holding a rebalanced basket. Five strategy families:
     F&O-eligible stocks only, hourly or 2-hourly bars, no fixed target --
     see run_short_ema_crossover_backtest's docstring for the shorting
     simplification this implies.
-  - ORB (Opening Range Breakout), long or short, hourly bars only. Long
+  - ORB (Opening Range Breakout), long or short, hourly bars only (two
+    flavors, same Yahoo/Upstox split as EMA crossover above). Long
     universe is top-N Nifty 500 momentum; short universe is bottom-N
     (weakest) F&O-eligible momentum, same reasoning as Short Momentum.
     See run_orb_backtest's docstring for the exact mechanics (opening
@@ -48,6 +49,7 @@ from streamlit_cache import (
     cached_load_fno_symbols,
     cached_load_hourly_full_ohlc,
     cached_load_hourly_ohlc,
+    cached_load_hourly_upstox_full_ohlc,
     cached_load_hourly_upstox_ohlc,
     cached_load_membership,
     cached_load_prices,
@@ -214,6 +216,9 @@ with st.sidebar:
             st.caption("No fixed profit target (default) -- pure trend-following exit via the stop conditions above.")
     elif is_orb:
         st.header("Opening Range Breakout")
+        orb_timeframe = st.radio(
+            "Timeframe", ["Hourly (Yahoo, ~2-3 years)", "Hourly (Upstox, ~4.5 years)"], index=0,
+        )
         range_minutes = st.slider(
             "Opening range (minutes)", min_value=60, max_value=180, value=60, step=60,
             help="Must be a multiple of 60 -- only hourly bars are available, so anything finer "
@@ -238,10 +243,20 @@ with st.sidebar:
                 "Fixed stoploss (% from entry)", min_value=0.5, max_value=30.0, value=8.0, step=0.5,
                 help="Long: stop = entry price x (1 - this%). Short: stop = entry price x (1 + this%)."
             )
-        st.caption(
-            "Yahoo Finance only serves hourly data for roughly the trailing 2-3 years, unlike "
-            "the daily data used elsewhere in this app which goes back to 2008."
-        )
+        if orb_timeframe.startswith("Hourly (Yahoo"):
+            st.caption(
+                "Yahoo Finance only serves hourly data for roughly the trailing 2-3 years, unlike "
+                "the daily data used elsewhere in this app which goes back to 2008."
+            )
+        else:
+            st.caption(
+                "Hourly bars built by pairing up the RSI Reversal strategy's 30-min Upstox bars "
+                "(see backtest_engine.load_hourly_upstox_full_ohlc) -- real history back to "
+                "2022-01-01, ~4.5 years, roughly double the Yahoo hourly option above. Same "
+                "~329-symbol universe coverage caveat as the other Upstox-sourced options: a "
+                "given month's top/bottom-N pick outside that set is silently skipped rather "
+                "than erroring."
+            )
         stop_desc = (
             f"a bar closes {'below' if orb_direction == 'long' else 'above'} the fixed stoploss "
             f"({stop_pct}% from entry)" if orb_stop_mode == "fixed_pct" else
@@ -459,16 +474,22 @@ if use_membership_filter:
 
 if is_orb:
     fno_symbols = cached_load_fno_symbols() if orb_direction == "short" else None
-    with st.spinner("Fetching hourly price data (first run only)..."):
-        ensure_hourly_data()
-    with st.spinner(f"Running ORB {orb_direction} backtest (hourly bars, ~2-3 year window)..."):
-        bar_open, bar_high, bar_low, bar_close = cached_load_hourly_full_ohlc()
-        result = run_orb_backtest(
-            monthly_prices, membership, bar_open, bar_high, bar_low, bar_close, fno_symbols,
-            lookback_months, skip_months, n_stocks, min_price,
-            orb_direction, range_minutes, max_reentries, orb_stop_mode, stop_pct,
-            position_pct, capital_base, allowed_symbols=universe_allowed_symbols, min_start_date=min_start_date,
-        )
+    if orb_timeframe.startswith("Hourly (Yahoo"):
+        with st.spinner("Fetching hourly price data (first run only)..."):
+            ensure_hourly_data()
+        with st.spinner(f"Running ORB {orb_direction} backtest (hourly bars, ~2-3 year window)..."):
+            bar_open, bar_high, bar_low, bar_close = cached_load_hourly_full_ohlc()
+    else:
+        with st.spinner("Fetching 30-minute price data (first run only)..."):
+            ensure_30min_data()
+        with st.spinner(f"Running ORB {orb_direction} backtest (hourly bars, ~4.5 year window)..."):
+            bar_open, bar_high, bar_low, bar_close = cached_load_hourly_upstox_full_ohlc()
+    result = run_orb_backtest(
+        monthly_prices, membership, bar_open, bar_high, bar_low, bar_close, fno_symbols,
+        lookback_months, skip_months, n_stocks, min_price,
+        orb_direction, range_minutes, max_reentries, orb_stop_mode, stop_pct,
+        position_pct, capital_base, allowed_symbols=universe_allowed_symbols, min_start_date=min_start_date,
+    )
 elif is_short:
     fno_symbols = cached_load_fno_symbols()
     with st.spinner("Fetching hourly price data (first run only)..."):

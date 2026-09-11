@@ -20,6 +20,7 @@ from backtest_engine import (
     load_gold_series,
     load_hourly_full_ohlc,
     load_hourly_ohlc,
+    load_hourly_upstox_full_ohlc,
     load_hourly_upstox_ohlc,
     load_liquid_series,
     load_membership_matrix,
@@ -98,6 +99,11 @@ def cached_load_30min_upstox_full_ohlc() -> tuple[pd.DataFrame, pd.DataFrame, pd
 @st.cache_data(show_spinner="Building hourly bars from 30-minute Upstox price history (~4.5 years)...")
 def cached_load_hourly_upstox_ohlc() -> tuple[pd.DataFrame, pd.DataFrame]:
     return load_hourly_upstox_ohlc()
+
+
+@st.cache_data(show_spinner="Building hourly OHLC bars from 30-minute Upstox price history for ORB (~4.5 years)...")
+def cached_load_hourly_upstox_full_ohlc() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    return load_hourly_upstox_full_ohlc()
 
 
 @st.cache_data(show_spinner="Loading F&O eligible stock list...")

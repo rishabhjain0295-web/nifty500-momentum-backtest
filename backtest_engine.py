@@ -400,6 +400,31 @@ def load_hourly_upstox_ohlc() -> tuple[pd.DataFrame, pd.DataFrame]:
     return open_1h.sort_index(), close_1h.sort_index()
 
 
+def load_hourly_upstox_full_ohlc() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Like load_hourly_upstox_ohlc, but also resamples High/Low -- needed
+    by the ORB (Opening Range Breakout) swing strategy to capture the
+    actual high/low of the opening range bar(s), not just their close.
+    Same day-pair grouping from 30-min Upstox bars, same ~4.5 year
+    window (back to 2022-01-01) instead of load_hourly_full_ohlc's
+    Yahoo-sourced ~2-3 years: open = pair's first bar's open, high = max
+    of the pair, low = min of the pair, close = pair's last bar's close,
+    labeled with the pair's first bar's timestamp."""
+    open_30, high_30, low_30, close_30 = load_30min_upstox_full_ohlc()
+    day = pd.Series(close_30.index.date, index=close_30.index)
+    pair_seq = close_30.groupby(day).cumcount() // 2
+    pair_key = day.astype(str) + "_" + pair_seq.astype(str)
+    bar_ts = pd.Series(close_30.index, index=close_30.index)
+
+    label = bar_ts.groupby(pair_key).first()
+    open_1h = open_30.groupby(pair_key).first()
+    high_1h = high_30.groupby(pair_key).max()
+    low_1h = low_30.groupby(pair_key).min()
+    close_1h = close_30.groupby(pair_key).last()
+    for df in (open_1h, high_1h, low_1h, close_1h):
+        df.index = label.reindex(df.index).values
+    return open_1h.sort_index(), high_1h.sort_index(), low_1h.sort_index(), close_1h.sort_index()
+
+
 def load_benchmark(price_col: str = "Adj Close", freq: str = "ME") -> pd.Series:
     f = INDEX_DIR / "NIFTY500.csv"
     df = pd.read_csv(f, index_col=0, parse_dates=True)
