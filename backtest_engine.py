@@ -603,6 +603,47 @@ def load_universe_symbols(name: str) -> set[str]:
     return set(pd.read_csv(f)["Symbol"])
 
 
+def _momentum_window(monthly_prices: pd.DataFrame, as_of_date: pd.Timestamp, lookback_months: int, skip_months: int):
+    """Shared window resolution behind compute_momentum_ranking and
+    compute_trailing_volatility -- both need the EXACT same
+    [start_idx, end_idx] slice (the lookback window ending skip_months
+    before as_of_date), so this is the one place that logic lives.
+    Returns None if as_of_date isn't in monthly_prices or there isn't
+    enough trailing history, else (start_idx, end_idx)."""
+    dates = monthly_prices.index
+    if as_of_date not in dates:
+        return None
+    i = dates.get_loc(as_of_date)
+    end_idx = i - skip_months
+    start_idx = end_idx - lookback_months
+    if start_idx < 0:
+        return None
+    return start_idx, end_idx
+
+
+def compute_trailing_volatility(
+    monthly_prices: pd.DataFrame,
+    as_of_date: pd.Timestamp,
+    lookback_months: int,
+    skip_months: int,
+) -> pd.Series | None:
+    """Annualized volatility (std dev of monthly returns x sqrt(12)) over
+    the SAME lookback window compute_momentum_ranking measures its return
+    over -- e.g. lookback_months=10, skip_months=1 means "volatility of
+    the 10 months of returns ending 1 month before as_of_date", pairing
+    exactly with that window's own trailing return. No separate lookback
+    parameter of its own, deliberately -- a risk-adjusted return is return
+    over risk measured over the SAME period, not two independently-tuned
+    windows. Returns None under the same conditions compute_momentum_
+    ranking does (not enough history)."""
+    window = _momentum_window(monthly_prices, as_of_date, lookback_months, skip_months)
+    if window is None:
+        return None
+    start_idx, end_idx = window
+    window_prices = monthly_prices.iloc[start_idx:end_idx + 1]
+    return window_prices.pct_change().std() * np.sqrt(12)
+
+
 def compute_momentum_ranking(
     monthly_prices: pd.DataFrame,
     membership: pd.DataFrame | None,
@@ -611,6 +652,8 @@ def compute_momentum_ranking(
     skip_months: int,
     min_price: float,
     allowed_symbols: set[str] | None = None,
+    max_volatility_pct: float | None = None,
+    use_risk_adjusted: bool = False,
 ) -> pd.Series | None:
     """Trailing lookback_months return (skipping the most recent skip_months)
     for every stock eligible as of as_of_date, sorted descending (first
@@ -629,27 +672,46 @@ def compute_momentum_ranking(
     ranking formula, shared by run_backtest (historical simulation), the
     live stock ranker (pages/1_Stock_Ranker.py, current snapshot), and
     swing_engine.py's strategies.
+
+    max_volatility_pct, if given, additionally requires a stock's trailing
+    ANNUALIZED volatility (see compute_trailing_volatility -- same window
+    as the return itself) to be at or below this %, e.g. 60.0 excludes
+    anything more volatile than 60%/yr. use_risk_adjusted, if True, scores
+    and sorts by (trailing return / that same volatility) instead of the
+    raw return -- a Sharpe-like ratio, not a percentage; stocks with
+    zero/NaN volatility are excluded first to avoid an undefined ratio.
+    Both are opt-in and back-compatible -- omitting them reproduces
+    exactly today's absolute-return-only behavior, which is what every
+    caller other than app.py and the Stock Ranker still does.
     """
-    dates = monthly_prices.index
-    if as_of_date not in dates:
+    window = _momentum_window(monthly_prices, as_of_date, lookback_months, skip_months)
+    if window is None:
         return None
-    i = dates.get_loc(as_of_date)
-    end_idx = i - skip_months
-    start_idx = end_idx - lookback_months
-    if start_idx < 0:
-        return None
+    start_idx, end_idx = window
 
     px_start = monthly_prices.iloc[start_idx]
     px_end = monthly_prices.iloc[end_idx]
-    last_price = monthly_prices.iloc[i]
+    last_price = monthly_prices.iloc[monthly_prices.index.get_loc(as_of_date)]
 
     eligible = (px_start > 0) & (px_end > 0) & (last_price >= min_price)
     if membership is not None:
         eligible &= membership.loc[as_of_date]
     if allowed_symbols is not None:
         eligible &= eligible.index.isin(allowed_symbols)
-    mom = (px_end / px_start - 1.0)[eligible].dropna()
-    return mom.sort_values(ascending=False)
+
+    mom = px_end / px_start - 1.0
+    score = mom
+
+    if max_volatility_pct is not None or use_risk_adjusted:
+        volatility = compute_trailing_volatility(monthly_prices, as_of_date, lookback_months, skip_months)
+        if max_volatility_pct is not None:
+            eligible &= volatility.notna() & (volatility <= max_volatility_pct / 100.0)
+        if use_risk_adjusted:
+            eligible &= volatility.notna() & (volatility > 1e-9)
+            score = mom / volatility
+
+    score = score[eligible].dropna()
+    return score.sort_values(ascending=False)
 
 
 def load_membership_matrix(dates: pd.DatetimeIndex, symbols: pd.Index) -> pd.DataFrame:
@@ -686,6 +748,8 @@ def run_backtest(
     gold_exit_lookback: int = 55,
     weighting_mode: str = "equal_monthly",
     allowed_symbols: set[str] | None = None,
+    max_volatility_pct: float | None = None,
+    use_risk_adjusted: bool = False,
 ) -> tuple[pd.Series, list[tuple[pd.Timestamp, list[str]]]]:
     """Returns (monthly portfolio returns, [(rebalance_date, holdings), ...]).
 
@@ -801,7 +865,8 @@ def run_backtest(
             continue
 
         ranked = compute_momentum_ranking(
-            monthly_prices, membership, today, lookback_months, skip_months, min_price, allowed_symbols
+            monthly_prices, membership, today, lookback_months, skip_months, min_price, allowed_symbols,
+            max_volatility_pct=max_volatility_pct, use_risk_adjusted=use_risk_adjusted,
         )
         if ranked is None or len(ranked) < n_stocks:
             continue

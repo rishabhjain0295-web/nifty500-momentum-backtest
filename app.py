@@ -241,6 +241,28 @@ with st.sidebar:
             "portfolio around a gold rotation, but not the gold ETF leg's own cost or tax."
         )
 
+    st.header("Volatility & risk-adjusted ranking")
+    ranking_method_label = st.radio(
+        "Ranking method", ["Absolute trailing return (default)", "Risk-adjusted (return / volatility)"],
+        index=0,
+        help="Risk-adjusted divides each stock's trailing return by its own trailing ANNUALIZED "
+             "volatility (std dev of the same lookback window's monthly returns x sqrt(12)) -- a "
+             "Sharpe-like score, favoring smoother trends over merely bigger ones. Stocks with "
+             "zero/undefined volatility are excluded, since the ratio wouldn't be meaningful."
+    )
+    use_risk_adjusted = ranking_method_label.startswith("Risk-adjusted")
+    use_volatility_filter = st.checkbox(
+        "Volatility filter", value=False,
+        help="Excludes any stock whose trailing annualized volatility (same definition as above) "
+             "exceeds the threshold below, before ranking -- independent of the ranking method "
+             "chosen above."
+    )
+    max_volatility_pct = None
+    if use_volatility_filter:
+        max_volatility_pct = st.slider(
+            "Max annualized volatility (%)", min_value=10.0, max_value=200.0, value=60.0, step=5.0,
+        )
+
     st.header("Universe & data")
     price_col = st.selectbox("Price field", ["Adj Close", "Close"], index=0)
     min_price = st.number_input("Minimum price filter (Rs)", min_value=0.0, value=10.0, step=5.0)
@@ -377,6 +399,7 @@ strat_rets, holdings_history = run_backtest(
     use_exit_band, exit_band_pct,
     use_regime_filter, bench_px, gold_px, gold_entry_lookback, gold_exit_lookback,
     weighting_mode, allowed_symbols,
+    max_volatility_pct=max_volatility_pct, use_risk_adjusted=use_risk_adjusted,
 )
 
 if use_stoploss or use_execution_lag:

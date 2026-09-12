@@ -12,11 +12,18 @@ of the same name -- Weekly re-derives the ranking on a weekly price grid
 view. See app.py's module docstring for why this needs a different price
 series (backtest_engine.load_prices' freq param), not just a different
 "as of" date.
+
+Optionally ranks by RISK-ADJUSTED return (trailing return / trailing
+annualized volatility, see backtest_engine.compute_trailing_volatility)
+instead of absolute return, and/or filters out anything above a chosen
+volatility threshold -- same two options as the Backtest page, mirrored
+here so a live ranking and a historical backtest can use the identical
+selection rule.
 """
 import pandas as pd
 import streamlit as st
 
-from backtest_engine import NSE_UNIVERSES, compute_momentum_ranking, ensure_stock_data
+from backtest_engine import NSE_UNIVERSES, compute_momentum_ranking, compute_trailing_volatility, ensure_stock_data
 from streamlit_cache import cached_load_current_universe, cached_load_prices, cached_load_universe_symbols
 
 st.set_page_config(page_title="Nifty 500 Stock Ranker", layout="wide")
@@ -75,6 +82,29 @@ with st.sidebar:
             help="Excludes the most recent N months from the lookback, to avoid short-term reversal effects."
         )
     min_price = st.number_input("Minimum price filter (Rs)", min_value=0.0, value=10.0, step=5.0)
+
+    st.header("Volatility & risk-adjusted ranking")
+    ranking_method_label = st.radio(
+        "Ranking method", ["Absolute trailing return (default)", "Risk-adjusted (return / volatility)"],
+        index=0,
+        help="Risk-adjusted divides each stock's trailing return by its own trailing ANNUALIZED "
+             "volatility (std dev of the same lookback window's returns x sqrt(12)) -- a "
+             "Sharpe-like score, favoring smoother trends over merely bigger ones. Stocks with "
+             "zero/undefined volatility are excluded, since the ratio wouldn't be meaningful."
+    )
+    use_risk_adjusted = ranking_method_label.startswith("Risk-adjusted")
+    use_volatility_filter = st.checkbox(
+        "Volatility filter", value=False,
+        help="Excludes any stock whose trailing annualized volatility (same definition as above) "
+             "exceeds the threshold below, before ranking -- independent of the ranking method "
+             "chosen above."
+    )
+    max_volatility_pct = None
+    if use_volatility_filter:
+        max_volatility_pct = st.slider(
+            "Max annualized volatility (%)", min_value=10.0, max_value=200.0, value=60.0, step=5.0,
+        )
+
     price_col = st.selectbox("Price field", ["Adj Close", "Close"], index=0)
     top_n = st.number_input("Highlight top N (buy zone)", min_value=1, max_value=100, value=10, step=1)
     exit_rank = st.number_input(
@@ -93,7 +123,8 @@ industry_by_symbol = (
 )
 
 ranked = compute_momentum_ranking(
-    monthly_prices, None, as_of_date, lookback_months, skip_months, min_price, allowed_symbols
+    monthly_prices, None, as_of_date, lookback_months, skip_months, min_price, allowed_symbols,
+    max_volatility_pct=max_volatility_pct, use_risk_adjusted=use_risk_adjusted,
 )
 used_fallback_date = False
 if (ranked is None or ranked.empty) and len(monthly_prices.index) > 1:
@@ -104,7 +135,8 @@ if (ranked is None or ranked.empty) and len(monthly_prices.index) > 1:
     # coverage for the selected Universe, rather than showing a blank page.
     for fallback_date in reversed(monthly_prices.index[:-1][-3:]):
         candidate = compute_momentum_ranking(
-            monthly_prices, None, fallback_date, lookback_months, skip_months, min_price, allowed_symbols
+            monthly_prices, None, fallback_date, lookback_months, skip_months, min_price, allowed_symbols,
+            max_volatility_pct=max_volatility_pct, use_risk_adjusted=use_risk_adjusted,
         )
         if candidate is not None and not candidate.empty:
             as_of_date = fallback_date
@@ -128,12 +160,15 @@ st.caption(
 if ranked is None or ranked.empty:
     st.warning("Not enough price history to compute a ranking with these parameters.")
 else:
-    table = ranked.to_frame("TrailingReturn").reset_index()
-    table.columns = ["Symbol", "TrailingReturn"]
+    score_col = "RiskAdjustedScore" if use_risk_adjusted else "TrailingReturn"
+    table = ranked.to_frame(score_col).reset_index()
+    table.columns = ["Symbol", score_col]
     table.insert(0, "Rank", range(1, len(table) + 1))
     table["CompanyName"] = table["Symbol"].map(name_by_symbol).fillna("-")
     table["Industry"] = table["Symbol"].map(industry_by_symbol).fillna("-")
     table["LastPrice"] = table["Symbol"].map(monthly_prices.loc[as_of_date])
+    volatility = compute_trailing_volatility(monthly_prices, as_of_date, lookback_months, skip_months)
+    table["Volatility"] = table["Symbol"].map(volatility) if volatility is not None else None
 
     def zone(rank: int) -> str:
         if rank <= top_n:
@@ -159,10 +194,11 @@ else:
             return ["background-color: rgba(210, 153, 34, 0.2)"] * len(row)
         return [""] * len(row)
 
+    score_fmt = "{:.2f}" if use_risk_adjusted else "{:.2%}"
     st.dataframe(
-        table[["Rank", "Symbol", "CompanyName", "Industry", "TrailingReturn", "LastPrice", "Zone"]]
+        table[["Rank", "Symbol", "CompanyName", "Industry", score_col, "Volatility", "LastPrice", "Zone"]]
         .style.apply(highlight_zone, axis=1)
-        .format({"TrailingReturn": "{:.2%}", "LastPrice": "{:.2f}"}),
+        .format({score_col: score_fmt, "Volatility": "{:.2%}", "LastPrice": "{:.2f}"}),
         hide_index=True, height=600, use_container_width=True,
     )
 
@@ -178,7 +214,10 @@ st.caption(
     "Ranking formula: trailing lookback-period return, skipping the most recent skip periods, "
     "computed from period-end closes -- identical to the momentum backtest's selection rule "
     "(compute_momentum_ranking in backtest_engine.py), so this page and the backtest never "
-    "drift out of sync with each other."
+    "drift out of sync with each other. Volatility (shown as its own column regardless of "
+    "ranking method) is the annualized std dev of that SAME lookback window's period returns "
+    "(x sqrt(12) for monthly mode) -- see compute_trailing_volatility. Risk-adjusted mode "
+    "ranks/sorts by trailing return divided by this volatility instead of the raw return."
 )
 st.caption(
     "Data freshness: a GitHub Actions workflow (.github/workflows/weekly-data-refresh.yml) "
