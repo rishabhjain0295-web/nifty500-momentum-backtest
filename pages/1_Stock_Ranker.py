@@ -4,7 +4,12 @@ trailing return, using the exact same formula as the backtest engine
 (compute_momentum_ranking in backtest_engine.py) -- shows what the momentum
 backtest's next scheduled rebalance would pick, as of the latest complete
 period in the downloaded data, and lets you check an existing holding's
-current rank against a custom exit threshold.
+current rank against a custom exit threshold. Optionally shows the ranking
+as of any earlier date instead (snapped to the closest period-end on or
+before it) -- e.g. what a past rebalance would have picked, or how a
+stock's rank has moved over time. compute_momentum_ranking already takes
+an arbitrary as_of_date, so this is purely a UI choice of which date to
+pass it, not a new code path.
 
 Rebalancing frequency (Monthly/Weekly) mirrors the Backtest page's option
 of the same name -- Weekly re-derives the ranking on a weekly price grid
@@ -113,8 +118,34 @@ with st.sidebar:
              "matches a custom exit rule like 'exit when rank drops below 18'. Beyond this "
              "rank, a stock is firmly out."
     )
+
+    st.header("Historical date")
+    use_custom_date = st.checkbox(
+        "Check a previous date instead of the latest", value=False,
+        help="Shows the ranking as of a specific past rebalance date -- e.g. what a rebalance "
+             "back then would have picked, or to see how a stock's rank has moved over time. "
+             "Off by default -- shows the latest complete period, same as before."
+    )
+    custom_as_of_date = None
+    if use_custom_date:
+        custom_as_of_date = st.date_input(
+            "As-of date", value=pd.Timestamp.today() - pd.DateOffset(months=6),
+            help=f"Snapped to the latest available {period_word}-end ON OR BEFORE this date -- "
+                 f"if you pick a date that isn't exactly a {period_word}-end, it uses whatever "
+                 f"period actually closed most recently before it."
+        )
 monthly_prices = cached_load_prices(price_col, price_freq)
-as_of_date = monthly_prices.index.max()
+if custom_as_of_date is not None:
+    eligible_dates = monthly_prices.index[monthly_prices.index <= pd.Timestamp(custom_as_of_date)]
+    if len(eligible_dates) == 0:
+        st.warning(
+            f"No price data available on or before {pd.Timestamp(custom_as_of_date).date()} -- "
+            "pick a later date."
+        )
+        st.stop()
+    as_of_date = eligible_dates.max()
+else:
+    as_of_date = monthly_prices.index.max()
 
 universe_df = cached_load_current_universe()
 name_by_symbol = dict(zip(universe_df["Symbol"], universe_df["Company Name"]))
@@ -127,12 +158,14 @@ ranked = compute_momentum_ranking(
     max_volatility_pct=max_volatility_pct, use_risk_adjusted=use_risk_adjusted,
 )
 used_fallback_date = False
-if (ranked is None or ranked.empty) and len(monthly_prices.index) > 1:
+if custom_as_of_date is None and (ranked is None or ranked.empty) and len(monthly_prices.index) > 1:
     # The very latest period can have sparse data if only some symbols'
     # price files have been refreshed since the calendar rolled over (each
     # symbol is downloaded independently, not all on the same schedule) --
     # fall back to the most recent earlier period that actually has enough
     # coverage for the selected Universe, rather than showing a blank page.
+    # Only applies to the "latest" default -- a user-picked historical date
+    # should get an honest "no data" message instead of a silent swap.
     for fallback_date in reversed(monthly_prices.index[:-1][-3:]):
         candidate = compute_momentum_ranking(
             monthly_prices, None, fallback_date, lookback_months, skip_months, min_price, allowed_symbols,
@@ -151,11 +184,21 @@ if used_fallback_date:
         "this Universe (symbols are refreshed on independent schedules) -- fell back to the "
         f"most recent {period_word} that did."
     )
-st.caption(
-    f"This is the latest COMPLETE {period_word} in the downloaded data -- matches what your "
-    f"next scheduled {period_word}-end rebalance would use. Source price data refreshes "
-    "automatically every Saturday morning (see the note at the bottom of the page)."
-)
+if custom_as_of_date is not None:
+    st.info(
+        f"Showing a **historical** ranking, as of **{as_of_date.date()}** -- snapped to the "
+        f"latest {period_word}-end on or before your chosen {pd.Timestamp(custom_as_of_date).date()}. "
+        "TrailingReturn/RiskAdjustedScore/Volatility/LastPrice are all genuinely as of that date. "
+        "Company name/industry lookup is still the CURRENT company list, though -- a stock that's "
+        "since been renamed or reclassified would show its current name/industry, not what it "
+        "was back then."
+    )
+else:
+    st.caption(
+        f"This is the latest COMPLETE {period_word} in the downloaded data -- matches what your "
+        f"next scheduled {period_word}-end rebalance would use. Source price data refreshes "
+        "automatically every Saturday morning (see the note at the bottom of the page)."
+    )
 
 if ranked is None or ranked.empty:
     st.warning("Not enough price history to compute a ranking with these parameters.")
