@@ -50,6 +50,7 @@ from backtest_engine import (
     ensure_hourly_data,
     ensure_stock_data,
 )
+from leverage_engine import apply_mtf_leverage
 from streamlit_cache import (
     cached_load_2h_ohlc,
     cached_load_15min_full_ohlc,
@@ -497,6 +498,59 @@ with st.sidebar:
                  "sizing capital steps up again."
         )
 
+    st.header("MTF Leverage Overlay")
+    use_leverage = st.checkbox(
+        "Enable MTF leverage overlay", value=False,
+        help="Optional, two-stage drawdown-triggered leverage (same engine as the Backtest page): "
+             "adds extra MTF (Margin Trading Facility) exposure after a bad month, and more after "
+             "a second bad month soon after. Its trigger/hold logic is inherently MONTHLY (a "
+             "'month' with return <= -X%, hold for N months) -- since this page's own equity curve "
+             "is bar-level (hourly/daily), the overlay runs on a MONTHLY-RESAMPLED copy of it "
+             "instead, shown as a separate comparison below the main results, not applied to the "
+             "granular trade log or equity chart above."
+    )
+    if use_leverage:
+        lev_trigger1_pct = st.slider(
+            "Leg 1 trigger: month return <= -X%", min_value=1.0, max_value=30.0, value=7.0, step=0.5,
+            help="A resampled month with return at or below negative this % adds the first leg of leverage."
+        )
+        lev_leg1_pct = st.slider(
+            "Leg 1 leverage added (%)", min_value=5.0, max_value=200.0, value=50.0, step=5.0,
+            help="Extra exposure added as a fraction of current equity, e.g. 50% means 150% total exposure."
+        )
+        lev_trigger2_pct = st.slider(
+            "Leg 2 trigger: another month return <= -X% within 2 months of leg 1", min_value=1.0,
+            max_value=30.0, value=5.0, step=0.5,
+            help="Within the 2 months AFTER leg 1's trigger month, a further month at or below "
+                 "negative this % adds a second leg -- fires at most once per leg-1 cycle."
+        )
+        lev_leg2_pct = st.slider(
+            "Leg 2 leverage added (%)", min_value=5.0, max_value=200.0, value=50.0, step=5.0,
+            help="Additional exposure on top of leg 1, e.g. 50%+50% = 200% total exposure while both are active."
+        )
+        lev_hold_mode_label = st.radio(
+            "Hold duration", ["Fixed number of months", "Until recovery above previous ATH"], index=0,
+            help="Fixed months: each leg independently expires N months after its own trigger. "
+                 "ATH recovery: a leg stays active until the strategy's OWN (unleveraged, "
+                 "monthly-resampled) NAV recovers to X% above its all-time-high as of that leg's "
+                 "trigger month."
+        )
+        lev_hold_mode = "fixed_months" if lev_hold_mode_label.startswith("Fixed") else "ath_recovery"
+        lev_hold_months = 6
+        lev_recovery_pct = 0.0
+        if lev_hold_mode == "fixed_months":
+            lev_hold_months = st.slider("Hold duration (months)", min_value=1, max_value=36, value=6, step=1)
+        else:
+            lev_recovery_pct = st.slider(
+                "Recovery above previous ATH to revert (%)", min_value=0.0, max_value=50.0, value=0.0, step=1.0,
+                help="0 = reverts as soon as the strategy's NAV merely reclaims its old high."
+            )
+        lev_annual_interest_pct = st.number_input(
+            "MTF interest rate (% per year)", min_value=0.0, value=10.0, step=0.5,
+            help="Charged monthly on the borrowed (leveraged) amount, deducted from equity "
+                 "regardless of that month's P&L."
+        )
+
 monthly_prices = cached_load_prices(price_col)
 membership = None
 if use_membership_filter:
@@ -651,6 +705,17 @@ if trades.empty or equity.empty:
 
 has_target = "target_price" in trades.columns
 
+leverage_result = None
+monthly_equity_unlevered = None
+if use_leverage:
+    monthly_equity_unlevered = equity.resample("ME").last().dropna()
+    monthly_rets = monthly_equity_unlevered.pct_change().dropna()
+    if len(monthly_rets) > 0:
+        leverage_result = apply_mtf_leverage(
+            monthly_rets, lev_trigger1_pct, lev_leg1_pct, lev_trigger2_pct, lev_leg2_pct,
+            lev_hold_mode, lev_hold_months, lev_recovery_pct, lev_annual_interest_pct,
+        )
+
 
 def fmt_rs(x: float) -> str:
     return f"Rs {x:,.0f}"
@@ -751,6 +816,61 @@ st.dataframe(
     trades["exit_reason"].value_counts().rename_axis("Exit reason").reset_index(name="Count"),
     hide_index=True,
 )
+
+if leverage_result is not None:
+    with st.expander("MTF leverage overlay (monthly-resampled)"):
+        st.caption(
+            "This strategy's equity curve is bar-level (hourly/daily), but the leverage engine's "
+            "trigger/hold logic is inherently monthly -- so this overlay runs on a MONTHLY "
+            "resample of the equity curve above, shown here as a separate comparison. It does "
+            "NOT change the KPIs, equity chart, or trade log above."
+        )
+        leveraged_rets = leverage_result["leveraged_rets"]
+        leveraged_equity = capital_base * (1 + leveraged_rets).cumprod()
+        total_interest_rs = leverage_result["interest_series"].sum() * capital_base
+
+        lev_final = leveraged_equity.iloc[-1] if len(leveraged_equity) else float("nan")
+        lev_n_years = (leveraged_equity.index[-1] - monthly_equity_unlevered.index[0]).days / 365.25
+        lev_cagr = (lev_final / capital_base) ** (1 / lev_n_years) - 1 if lev_n_years > 0 and lev_final > 0 else float("nan")
+        unlev_final = monthly_equity_unlevered.iloc[-1]
+        unlev_cagr = (unlev_final / capital_base) ** (1 / lev_n_years) - 1 if lev_n_years > 0 and unlev_final > 0 else float("nan")
+        lev_dd = (leveraged_equity / leveraged_equity.cummax() - 1).min() if len(leveraged_equity) else float("nan")
+        unlev_dd = (monthly_equity_unlevered / monthly_equity_unlevered.cummax() - 1).min()
+
+        st.caption(
+            f"{leverage_result['n_tranches']} tranche(s) triggered. "
+            f"Total interest paid: Rs {total_interest_rs:,.0f} (on a Rs {capital_base:,.0f} capital base)."
+        )
+        lev_cols = st.columns(4)
+        lev_cols[0].metric("CAGR (monthly, unleveraged)", fmt_pct(unlev_cagr))
+        lev_cols[1].metric("CAGR (monthly, leveraged)", fmt_pct(lev_cagr))
+        lev_cols[2].metric("Max drawdown (unleveraged)", fmt_pct(unlev_dd))
+        lev_cols[3].metric("Max drawdown (leveraged)", fmt_pct(lev_dd))
+
+        fig_lev = go.Figure()
+        fig_lev.add_trace(go.Scatter(
+            x=monthly_equity_unlevered.index, y=monthly_equity_unlevered.values, name="Unleveraged (monthly)"
+        ))
+        fig_lev.add_trace(go.Scatter(x=leveraged_equity.index, y=leveraged_equity.values, name="Leveraged (monthly)"))
+        fig_lev.update_layout(
+            yaxis_title="Portfolio value (Rs)", margin=dict(t=30, l=10, r=10, b=10), height=350,
+        )
+        st.plotly_chart(fig_lev, use_container_width=True)
+
+        if leverage_result["events"]:
+            ev_df = pd.DataFrame(leverage_result["events"])
+            ev_df["date"] = ev_df["date"].dt.date
+            ev_df["start"] = ev_df["start"].dt.date
+            ev_df["end"] = ev_df["end"].dt.date
+            st.dataframe(
+                ev_df.rename(columns={
+                    "date": "Trigger month", "leg": "Leg", "month_return": "Month return",
+                    "start": "Active from", "end": "Active until",
+                }).style.format({"Month return": "{:.2%}"}),
+                hide_index=True, height=250,
+            )
+        else:
+            st.caption("No leverage triggers with these parameters.")
 
 has_entry_rank = "entry_rank" in trades.columns
 
