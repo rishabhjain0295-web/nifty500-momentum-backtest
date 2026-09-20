@@ -112,9 +112,74 @@ def ensure_mutual_fund_data(archive_url: str | None = None) -> None:
     _ensure_data_from_archive(MUTUAL_FUND_DIR, archive_url, "MUTUAL_FUND_ARCHIVE_URL", MUTUAL_FUND_ARCHIVE_URL)
 
 
+def _consolidated_parquet_path(field: str) -> Path:
+    slug = field.lower().replace(" ", "")
+    return STOCKS_DIR / f"_consolidated_{slug}.parquet"
+
+
+def _build_wide_daily_field(field: str) -> pd.DataFrame:
+    """The expensive path: opens and parses every symbol's CSV
+    individually to pull out one field ('Adj Close', 'Close', or
+    'Open') and concats them into one wide (date x symbol) DataFrame.
+    Only runs when no pre-built consolidated Parquet cache exists yet --
+    see load_wide_daily_field's docstring for why that's the uncommon
+    case."""
+    frames = {}
+    for f in STOCKS_DIR.glob("*.csv"):
+        sym = f.stem
+        try:
+            df = pd.read_csv(f, index_col=0, parse_dates=True)
+        except Exception:
+            continue
+        if field not in df.columns or df.empty:
+            continue
+        s = df[field].dropna()
+        if s.empty:
+            continue
+        frames[sym] = s
+    if not frames:
+        raise RuntimeError(f"No usable '{field}' price data found in {STOCKS_DIR}")
+    return pd.DataFrame(frames).sort_index()
+
+
+def load_wide_daily_field(field: str) -> pd.DataFrame:
+    """Full daily (unresampled) wide price history for one OHLC-ish
+    field ('Adj Close', 'Close', or 'Open'), symbol columns -- the
+    shared, expensive-to-build input behind load_prices and
+    load_daily_prices.
+
+    Reads a pre-built consolidated Parquet cache
+    (STOCKS_DIR/_consolidated_<field>.parquet) if one exists: one fast
+    binary read instead of opening and parsing ~1000 individual CSVs on
+    every fresh session -- that CSV-by-CSV parse used to be the
+    dominant cost of a cold app start, and on the Backtest page it was
+    paid out TWICE (once each for load_prices and load_daily_prices,
+    which used to loop independently). scripts/refresh_weekly_data.py
+    rebuilds this cache every week and ships it inside stocks.zip, so
+    the deployed app doesn't have to build it itself.
+
+    Falls back to parsing the CSVs directly -- and opportunistically
+    writes the Parquet cache for next time -- if no cache exists yet,
+    e.g. a fresh local clone before the weekly refresh script has ever
+    run against it."""
+    parquet_path = _consolidated_parquet_path(field)
+    if parquet_path.exists():
+        try:
+            return pd.read_parquet(parquet_path)
+        except Exception:
+            pass  # fall through and rebuild if the cached file is somehow unreadable
+    wide = _build_wide_daily_field(field)
+    try:
+        wide.to_parquet(parquet_path, compression="zstd")
+    except Exception:
+        pass  # best-effort cache -- a read-only filesystem shouldn't break loading
+    return wide
+
+
 def load_prices(price_col: str = "Adj Close", freq: str = "ME") -> pd.DataFrame:
-    """Load all stock CSVs into one wide DataFrame of period-end prices,
-    symbol columns. freq is any pandas resample rule -- "ME" (the default,
+    """Wide DataFrame of period-end prices, symbol columns -- see
+    load_wide_daily_field for where the underlying daily data comes
+    from. freq is any pandas resample rule -- "ME" (the default,
     calendar month-end) for the monthly rebalancing engine everywhere else
     in this app, or "W-FRI" (calendar week ending Friday) for the Backtest
     page's weekly rebalancing option. run_backtest and
@@ -123,53 +188,26 @@ def load_prices(price_col: str = "Adj Close", freq: str = "ME") -> pd.DataFrame:
     for lookback/skip, not calendar-month arithmetic -- so lookback/skip/
     hold counts passed alongside a "W-FRI" frame are interpreted in WEEKS,
     not months."""
-    frames = {}
-    for f in STOCKS_DIR.glob("*.csv"):
-        sym = f.stem
-        try:
-            df = pd.read_csv(f, index_col=0, parse_dates=True)
-        except Exception:
-            continue
-        if price_col not in df.columns or df.empty:
-            continue
-        s = df[price_col].dropna()
-        if s.empty:
-            continue
-        frames[sym] = s
-    if not frames:
-        raise RuntimeError(f"No usable price data found in {STOCKS_DIR}")
-    wide = pd.DataFrame(frames).sort_index()
-    return wide.resample(freq).last()
+    return load_wide_daily_field(price_col).resample(freq).last()
 
 
 def load_daily_prices(price_col: str = "Adj Close") -> tuple[pd.DataFrame, pd.DataFrame]:
     """Loads daily close (price_col) and daily open prices, WITHOUT resampling
-    to monthly. Only used by the stoploss/re-entry overlay (apply_stoploss),
-    which needs day-by-day granularity that the rest of the engine discards
-    by working in monthly_prices. Note Open is raw (not split/dividend
-    adjusted the way Adj Close is) -- a minor inconsistency around corporate
-    actions when price_col='Adj Close', not corrected for here."""
-    close_frames = {}
-    open_frames = {}
-    for f in STOCKS_DIR.glob("*.csv"):
-        sym = f.stem
-        try:
-            df = pd.read_csv(f, index_col=0, parse_dates=True)
-        except Exception:
-            continue
-        if price_col not in df.columns or "Open" not in df.columns or df.empty:
-            continue
-        c = df[price_col].dropna()
-        o = df["Open"].dropna()
-        if c.empty or o.empty:
-            continue
-        close_frames[sym] = c
-        open_frames[sym] = o
-    if not close_frames:
-        raise RuntimeError(f"No usable daily price data found in {STOCKS_DIR}")
-    daily_close = pd.DataFrame(close_frames).sort_index()
-    daily_open = pd.DataFrame(open_frames).sort_index()
-    return daily_close, daily_open
+    to monthly. Only used by the stoploss/re-entry overlay (apply_stoploss)
+    and T+1 execution lag (apply_execution_lag), which need day-by-day
+    granularity that the rest of the engine discards by working in
+    monthly_prices. Note Open is raw (not split/dividend adjusted the way
+    Adj Close is) -- a minor inconsistency around corporate actions when
+    price_col='Adj Close', not corrected for here.
+
+    Restricts both frames to symbols present in BOTH (a symbol missing
+    either field entirely is dropped from both), matching the old
+    single-pass-per-file behavior even though the two fields are now
+    loaded (and cached) independently via load_wide_daily_field."""
+    daily_close = load_wide_daily_field(price_col)
+    daily_open = load_wide_daily_field("Open")
+    common_symbols = daily_close.columns.intersection(daily_open.columns)
+    return daily_close[common_symbols], daily_open[common_symbols]
 
 
 def load_daily_ohlc() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:

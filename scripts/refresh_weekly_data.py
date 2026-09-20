@@ -15,11 +15,19 @@ Does four things:
   2. Re-downloads data/universes/*.csv (get_nse_universes.py) and
      data/fno_stocks.csv (get_fno_list.py) -- current-snapshot lists,
      cheap to just refresh outright rather than top up.
-  3. Re-zips data/stocks/ and re-uploads it as the stocks.zip GitHub
-     Release asset the deployed app bootstraps from (gh release upload
-     --clobber) -- data/stocks/ itself is gitignored (too large for git),
-     this is the only way the deployed app sees the refresh.
-  4. Commits and pushes data/universes/ and data/fno_stocks.csv (these ARE
+  3. Rebuilds the consolidated Parquet price cache (data/stocks/
+     _consolidated_{adjclose,close,open}.parquet -- see
+     backtest_engine.load_wide_daily_field) from the just-topped-up CSVs,
+     and includes it in the zip below -- so a freshly booted app reads
+     three fast binary files instead of parsing ~1000 CSVs itself (which
+     used to be the dominant cost of a cold start, paid out TWICE on the
+     Backtest page alone).
+  4. Re-zips data/stocks/ (CSVs + the Parquet cache) and re-uploads it as
+     the stocks.zip GitHub Release asset the deployed app bootstraps from
+     (gh release upload --clobber) -- data/stocks/ itself is gitignored
+     (too large for git), this is the only way the deployed app sees the
+     refresh.
+  5. Commits and pushes data/universes/ and data/fno_stocks.csv (these ARE
      small enough to live in git directly).
 
 Does NOT touch data/hourly/, data/15min/, or data/etfs/ -- out of scope
@@ -120,11 +128,23 @@ def refresh_universe_lists():
     get_fno_list.main()
 
 
+def rebuild_consolidated_cache():
+    from backtest_engine import _consolidated_parquet_path, load_wide_daily_field
+
+    print("Rebuilding consolidated price cache (Adj Close, Close, Open)...")
+    for field in ("Adj Close", "Close", "Open"):
+        path = _consolidated_parquet_path(field)
+        if path.exists():
+            path.unlink()  # force a rebuild from the just-topped-up CSVs, not a stale cache
+        wide = load_wide_daily_field(field)
+        print(f"  {field}: {wide.shape[0]} dates x {wide.shape[1]} symbols -> {path.name}")
+
+
 def reupload_stocks_zip():
     print("Re-zipping data/stocks/...")
     zip_path = ROOT / "data" / "stocks.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for f in sorted(STOCKS_DIR.glob("*.csv")):
+        for f in sorted(STOCKS_DIR.glob("*.csv")) + sorted(STOCKS_DIR.glob("*.parquet")):
             zf.write(f, f.name)
     size_mb = zip_path.stat().st_size / 1e6
     print(f"  {size_mb:.1f} MB")
@@ -160,6 +180,7 @@ def main():
     topup_stocks()
     topup_indices()
     refresh_universe_lists()
+    rebuild_consolidated_cache()
     reupload_stocks_zip()
     commit_and_push()
     print("\nWeekly refresh complete. The deployed Streamlit Cloud app still needs a manual "
