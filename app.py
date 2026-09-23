@@ -263,6 +263,27 @@ with st.sidebar:
             "Max annualized volatility (%)", min_value=10.0, max_value=200.0, value=60.0, step=5.0,
         )
 
+    use_return_sanity_filter = st.checkbox(
+        "Data sanity filter: exclude implausible trailing returns", value=True,
+        help="Excludes a stock from ranking if its RAW trailing return (before any "
+             "risk-adjustment) exceeds the threshold below. Added after finding 110 of "
+             "~1,089 symbols have an implausible (>3x single-day) price jump somewhere in "
+             "their pre-2008 history -- almost certainly unadjusted splits/mergers/symbol "
+             "reuse in that older Yahoo Finance data, not real moves (e.g. KANSAINER, ~40x "
+             "between May 2004 and June 2005). Without this, such a stock dominates the "
+             "top-N ranking for however many months its lookback window straddles the bad "
+             "jump, producing a fabricated 'exceptional' period. On by default -- turn off "
+             "to see the raw, unfiltered behavior."
+    )
+    max_trailing_return_pct = None
+    if use_return_sanity_filter:
+        max_trailing_return_pct = st.slider(
+            "Max trailing return (%)", min_value=100.0, max_value=2000.0, value=500.0, step=50.0,
+            help="500% = 6x over the lookback window. Real momentum winners can legitimately "
+                 "run a few hundred percent; the flagged artifacts are typically 1,000%+, "
+                 "often 10x-100x+."
+        )
+
     st.header("Universe & data")
     price_col = st.selectbox("Price field", ["Adj Close", "Close"], index=0)
     min_price = st.number_input("Minimum price filter (Rs)", min_value=0.0, value=10.0, step=5.0)
@@ -400,6 +421,7 @@ strat_rets, holdings_history = run_backtest(
     use_regime_filter, bench_px, gold_px, gold_entry_lookback, gold_exit_lookback,
     weighting_mode, allowed_symbols,
     max_volatility_pct=max_volatility_pct, use_risk_adjusted=use_risk_adjusted,
+    max_trailing_return_pct=max_trailing_return_pct,
 )
 
 if use_stoploss or use_execution_lag:

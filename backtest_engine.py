@@ -692,6 +692,7 @@ def compute_momentum_ranking(
     allowed_symbols: set[str] | None = None,
     max_volatility_pct: float | None = None,
     use_risk_adjusted: bool = False,
+    max_trailing_return_pct: float | None = None,
 ) -> pd.Series | None:
     """Trailing lookback_months return (skipping the most recent skip_months)
     for every stock eligible as of as_of_date, sorted descending (first
@@ -721,6 +722,19 @@ def compute_momentum_ranking(
     Both are opt-in and back-compatible -- omitting them reproduces
     exactly today's absolute-return-only behavior, which is what every
     caller other than app.py and the Stock Ranker still does.
+
+    max_trailing_return_pct, if given, excludes a stock whose RAW trailing
+    return (before any risk-adjustment) exceeds this % -- a data-sanity
+    guard, not a strategy choice. Found via real evidence: 110 of ~1,089
+    symbols have an implausible (>3x single-day) price jump somewhere in
+    their pre-2008 history (almost certainly unadjusted splits/mergers/
+    symbol reuse in that older Yahoo Finance data, not real moves -- see
+    e.g. KANSAINER, ~40x between May 2004 and June 2005). A stock like
+    that dominates the top-N ranking for the ~lookback_months its window
+    straddles the bad jump, which is what made 2003/2005's backtest years
+    look "exceptional" before this existed. Checked against the RAW
+    return regardless of use_risk_adjusted, since the artifact is in the
+    return itself, not in how it's scored.
     """
     window = _momentum_window(monthly_prices, as_of_date, lookback_months, skip_months)
     if window is None:
@@ -739,6 +753,9 @@ def compute_momentum_ranking(
 
     mom = px_end / px_start - 1.0
     score = mom
+
+    if max_trailing_return_pct is not None:
+        eligible &= mom <= max_trailing_return_pct / 100.0
 
     if max_volatility_pct is not None or use_risk_adjusted:
         volatility = compute_trailing_volatility(monthly_prices, as_of_date, lookback_months, skip_months)
@@ -788,6 +805,7 @@ def run_backtest(
     allowed_symbols: set[str] | None = None,
     max_volatility_pct: float | None = None,
     use_risk_adjusted: bool = False,
+    max_trailing_return_pct: float | None = None,
 ) -> tuple[pd.Series, list[tuple[pd.Timestamp, list[str]]]]:
     """Returns (monthly portfolio returns, [(rebalance_date, holdings), ...]).
 
@@ -905,6 +923,7 @@ def run_backtest(
         ranked = compute_momentum_ranking(
             monthly_prices, membership, today, lookback_months, skip_months, min_price, allowed_symbols,
             max_volatility_pct=max_volatility_pct, use_risk_adjusted=use_risk_adjusted,
+            max_trailing_return_pct=max_trailing_return_pct,
         )
         if ranked is None or len(ranked) < n_stocks:
             continue

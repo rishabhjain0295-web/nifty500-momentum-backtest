@@ -110,6 +110,19 @@ with st.sidebar:
             "Max annualized volatility (%)", min_value=10.0, max_value=200.0, value=60.0, step=5.0,
         )
 
+    use_return_sanity_filter = st.checkbox(
+        "Data sanity filter: exclude implausible trailing returns", value=True,
+        help="Excludes a stock whose RAW trailing return exceeds the threshold below -- see "
+             "the Backtest page's identical control for why (110 of ~1,089 symbols have an "
+             "implausible, almost certainly data-artifact price jump somewhere in their "
+             "pre-2008 history). On by default."
+    )
+    max_trailing_return_pct = None
+    if use_return_sanity_filter:
+        max_trailing_return_pct = st.slider(
+            "Max trailing return (%)", min_value=100.0, max_value=2000.0, value=500.0, step=50.0,
+        )
+
     price_col = st.selectbox("Price field", ["Adj Close", "Close"], index=0)
     top_n = st.number_input("Highlight top N (buy zone)", min_value=1, max_value=100, value=10, step=1)
     exit_rank = st.number_input(
@@ -156,6 +169,7 @@ industry_by_symbol = (
 ranked = compute_momentum_ranking(
     monthly_prices, None, as_of_date, lookback_months, skip_months, min_price, allowed_symbols,
     max_volatility_pct=max_volatility_pct, use_risk_adjusted=use_risk_adjusted,
+    max_trailing_return_pct=max_trailing_return_pct,
 )
 used_fallback_date = False
 if custom_as_of_date is None and (ranked is None or ranked.empty) and len(monthly_prices.index) > 1:
@@ -170,6 +184,7 @@ if custom_as_of_date is None and (ranked is None or ranked.empty) and len(monthl
         candidate = compute_momentum_ranking(
             monthly_prices, None, fallback_date, lookback_months, skip_months, min_price, allowed_symbols,
             max_volatility_pct=max_volatility_pct, use_risk_adjusted=use_risk_adjusted,
+            max_trailing_return_pct=max_trailing_return_pct,
         )
         if candidate is not None and not candidate.empty:
             as_of_date = fallback_date

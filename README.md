@@ -40,6 +40,22 @@ download the monthly returns.
 - `data/failed_symbols.txt` / `data/failed_historical_symbols.txt` — symbols yfinance couldn't fetch. Re-run the relevant download script to retry (existing files are skipped).
 - `data/no_pre2008_data_symbols.txt` — symbols `backfill_stocks_1998.py` couldn't extend past their existing (2008-starting) history -- Yahoo genuinely has nothing earlier for them (later IPO, later addition to Yahoo's own coverage, etc.), not a bug.
 
+## Data sanity filter (implausible pre-2008 return artifacts)
+
+Backtesting the newly-extended 1998-2007 history surfaced 110 of ~1,089 symbols
+with an implausible (>3x single-day) price jump somewhere in that window --
+almost certainly unadjusted splits/mergers/symbol reuse in Yahoo's older Indian-
+stock data, not real moves (e.g. `KANSAINER`, ~40x between May 2004 and June
+2005). Such a stock dominates the top-N momentum ranking for however many
+months its lookback window straddles the bad jump, producing a fabricated
+"exceptional" period. `compute_momentum_ranking`'s new `max_trailing_return_pct`
+parameter excludes a stock whose raw trailing return exceeds a threshold (the
+Backtest/Stock Ranker pages default this ON at 500%). This does NOT fully
+flatten 2003/2005/2006 -- those were genuinely strong years for Indian equities
+(the benchmark itself returns +98%/+36%/+34% those years) -- it only removes
+individual stocks whose *reported* return is a data artifact rather than a real
+market move.
+
 ## Point-in-time membership (survivorship bias fix)
 
 The original dataset used *today's* Nifty 500 list applied backward to 2008,
