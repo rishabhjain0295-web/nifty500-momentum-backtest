@@ -142,6 +142,30 @@ def _build_wide_daily_field(field: str) -> pd.DataFrame:
     return pd.DataFrame(frames).sort_index()
 
 
+def _clean_bad_ticks(wide: pd.DataFrame) -> pd.DataFrame:
+    """Detects and corrects "spike-and-revert" bad ticks: a single day
+    where a symbol's price jumps by an extreme ratio then reverts almost
+    exactly the next trading day. Found via real evidence, not
+    speculation: 209 such incidents across 34 distinct dates (1998-2020)
+    in this project's own data, up to 97 DIFFERENT symbols affected on a
+    single day (2005-07-28), each by a different, unrelated ratio (2x,
+    5x, 11x, ...) -- a vendor data-quality glitch for that date, not a
+    real synchronized market move (a real event wouldn't hit unrelated
+    stocks by wildly different, individually-reverting amounts). Only
+    replaces the specific flagged (date, symbol) cells -- with the
+    average of the immediately adjacent (trusted) days -- never touches
+    genuine multi-day gaps (a stock not yet listed, delisted, etc.),
+    since the detection requires both neighboring days to already be
+    valid numbers."""
+    ratio = wide / wide.shift(1)
+    reverts = ratio * ratio.shift(-1)
+    spike = ((ratio > 1.5) | (ratio < 2 / 3)) & (reverts > 0.9) & (reverts < 1.1)
+    if not spike.to_numpy().any():
+        return wide
+    replacement = (wide.shift(1) + wide.shift(-1)) / 2.0
+    return wide.where(~spike, replacement)
+
+
 def load_wide_daily_field(field: str) -> pd.DataFrame:
     """Full daily (unresampled) wide price history for one OHLC-ish
     field ('Adj Close', 'Close', or 'Open'), symbol columns -- the
@@ -161,14 +185,16 @@ def load_wide_daily_field(field: str) -> pd.DataFrame:
     Falls back to parsing the CSVs directly -- and opportunistically
     writes the Parquet cache for next time -- if no cache exists yet,
     e.g. a fresh local clone before the weekly refresh script has ever
-    run against it."""
+    run against it. Either way, the result has already been through
+    _clean_bad_ticks (see its docstring) before being cached, so every
+    caller benefits without needing to know about it."""
     parquet_path = _consolidated_parquet_path(field)
     if parquet_path.exists():
         try:
             return pd.read_parquet(parquet_path)
         except Exception:
             pass  # fall through and rebuild if the cached file is somehow unreadable
-    wide = _build_wide_daily_field(field)
+    wide = _clean_bad_ticks(_build_wide_daily_field(field))
     try:
         wide.to_parquet(parquet_path, compression="zstd")
     except Exception:
@@ -196,18 +222,47 @@ def load_daily_prices(price_col: str = "Adj Close") -> tuple[pd.DataFrame, pd.Da
     to monthly. Only used by the stoploss/re-entry overlay (apply_stoploss)
     and T+1 execution lag (apply_execution_lag), which need day-by-day
     granularity that the rest of the engine discards by working in
-    monthly_prices. Note Open is raw (not split/dividend adjusted the way
-    Adj Close is) -- a minor inconsistency around corporate actions when
-    price_col='Adj Close', not corrected for here.
+    monthly_prices.
 
-    Restricts both frames to symbols present in BOTH (a symbol missing
-    either field entirely is dropped from both), matching the old
-    single-pass-per-file behavior even though the two fields are now
-    loaded (and cached) independently via load_wide_daily_field."""
+    Open is scaled onto the SAME adjustment basis as price_col (NOT the
+    raw print) when price_col='Adj Close' -- Yahoo only ever publishes a
+    split/dividend-adjusted CLOSE, never an adjusted Open, so Open is
+    scaled by that day's own (price_col / raw Close) ratio. Mixing a raw
+    Open directly against an Adj Close-based price (monthly_prices or
+    daily_close) is a real bug, not a "minor inconsistency": Adj Close is
+    backward-adjusted for EVERY split/bonus up to TODAY, so for an old
+    date, a raw Open can be many times larger than that same day's Adj
+    Close purely from splits that hadn't happened yet -- found via
+    apply_execution_lag's T+1 calculation, which mixed exactly these two
+    bases and showed VEDL "returning" +258% on a single execution day in
+    Nov 2005 (Adj Close 14.16 vs raw Open 50.75, same stock, one day
+    apart) purely from this mismatch, not a real price move. If price_col
+    is already 'Close' (raw), no scaling is needed -- Open is returned as
+    printed.
+
+    Restricts both frames to symbols present in all the fields needed
+    (a symbol missing any of them is dropped), matching the old
+    single-pass-per-file behavior even though each field is now loaded
+    (and cached) independently via load_wide_daily_field."""
     daily_close = load_wide_daily_field(price_col)
-    daily_open = load_wide_daily_field("Open")
-    common_symbols = daily_close.columns.intersection(daily_open.columns)
-    return daily_close[common_symbols], daily_open[common_symbols]
+    daily_open_raw = load_wide_daily_field("Open")
+    common_symbols = daily_close.columns.intersection(daily_open_raw.columns)
+    daily_close = daily_close[common_symbols]
+    daily_open_raw = daily_open_raw[common_symbols]
+
+    if price_col == "Close":
+        return daily_close, daily_open_raw
+
+    daily_close_raw = load_wide_daily_field("Close")
+    common_symbols = common_symbols.intersection(daily_close_raw.columns)
+    daily_close = daily_close[common_symbols]
+    daily_open_raw = daily_open_raw[common_symbols]
+    daily_close_raw = daily_close_raw[common_symbols]
+
+    adj_factor = daily_close / daily_close_raw.reindex(daily_close.index)
+    adj_factor = adj_factor.replace([np.inf, -np.inf], np.nan)
+    daily_open = daily_open_raw * adj_factor.reindex(daily_open_raw.index)
+    return daily_close, daily_open
 
 
 def load_daily_ohlc() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
