@@ -8,3 +8,4 @@ tqdm
 xlrd
 openpyxl
 pyarrow
+jugaad-data
