@@ -39,6 +39,7 @@ from backtest_engine import (
     run_backtest,
     yearly_table,
 )
+import db_public
 from leverage_engine import apply_mtf_leverage
 from streamlit_cache import (
     cached_load_benchmark,
@@ -403,6 +404,104 @@ with st.sidebar:
         ltcg_rate_pct = st.number_input("LTCG rate, >=12mo holding (%)", min_value=0.0, value=12.5, step=0.5)
         ltcg_exemption = st.number_input("LTCG exemption per year (Rs)", min_value=0.0, value=125_000.0, step=25_000.0)
         cess_pct = st.number_input("Health & education cess on tax (%)", min_value=0.0, value=4.0, step=1.0)
+
+    st.header("Saved Strategies")
+    st.caption(
+        "Public feature: save this configuration under a name, and anyone (including you) can "
+        "come back and see its entries/exits over the last 6 months plus current positions -- "
+        "recomputed every Saturday morning when price data refreshes. Only the CORE parameters "
+        "that determine which stocks are held are saved (not cost/tax, leverage, or display "
+        "settings)."
+    )
+    try:
+        db_public.init_schema()
+        public_db_ok = True
+    except db_public.DatabaseNotConfigured:
+        public_db_ok = False
+        st.info("Saved Strategies isn't configured on this deployment yet.")
+
+    if public_db_ok:
+        new_strategy_name = st.text_input("Name for this configuration")
+        if st.button("Save this strategy"):
+            name = new_strategy_name.strip()
+            if not name:
+                st.error("Give the strategy a name.")
+            elif db_public.strategy_name_exists(name):
+                st.error(f"A strategy named '{name}' already exists -- pick a different name.")
+            else:
+                params = dict(
+                    universe=universe_label, rebal_freq=rebal_freq_label,
+                    lookback_months=lookback_months, skip_months=skip_months, hold_months=hold_months,
+                    n_stocks=n_stocks, min_price=min_price, price_col=price_col,
+                    use_membership_filter=use_membership_filter, weighting_mode=weighting_mode,
+                    use_exit_band=use_exit_band, exit_band_pct=exit_band_pct,
+                    use_regime_filter=use_regime_filter, gold_entry_lookback=gold_entry_lookback,
+                    gold_exit_lookback=gold_exit_lookback, max_volatility_pct=max_volatility_pct,
+                    use_risk_adjusted=use_risk_adjusted, max_trailing_return_pct=max_trailing_return_pct,
+                )
+                try:
+                    _, owner_key = db_public.save_strategy(name, params)
+                    st.success(f"Saved '{name}'. Entries/exits appear after the next Saturday refresh.")
+                    st.warning("Copy this key now -- needed to delete this strategy later, shown only once:")
+                    st.code(owner_key)
+                except ValueError as e:
+                    st.error(str(e))
+
+        st.divider()
+        saved_strategies = db_public.list_strategies()
+        view_options = ["(none)"] + [s["name"] for s in saved_strategies]
+        view_choice = st.selectbox("View a saved strategy", view_options)
+        selected_strategy = (
+            next((s for s in saved_strategies if s["name"] == view_choice), None)
+            if view_choice != "(none)" else None
+        )
+    else:
+        selected_strategy = None
+
+if selected_strategy is not None:
+    with st.container(border=True):
+        st.subheader(f"Saved strategy: {selected_strategy['name']}")
+        if selected_strategy["last_computed_at"] is None:
+            st.info(
+                "Not computed yet -- entries/exits and current positions appear after the next "
+                "Saturday morning refresh."
+            )
+        else:
+            st.caption(
+                f"Last recomputed {selected_strategy['last_computed_at'].strftime('%Y-%m-%d %H:%M UTC')} "
+                "-- updates every Saturday morning when price data refreshes from NSE."
+            )
+            positions = db_public.list_current_positions(selected_strategy["id"])
+            events = db_public.list_strategy_events(
+                selected_strategy["id"], pd.Timestamp.today() - pd.DateOffset(months=6)
+            )
+            tab_positions, tab_events, tab_params = st.tabs(
+                ["Current positions", "Entries & exits (last 6 months)", "Parameters"]
+            )
+            with tab_positions:
+                if positions:
+                    st.dataframe(pd.DataFrame(positions), hide_index=True, use_container_width=True)
+                else:
+                    st.caption("No current positions (e.g. parked in GOLDBEES, or no eligible stocks).")
+            with tab_events:
+                if events:
+                    ev_df = pd.DataFrame(events).rename(
+                        columns={"event_date": "Date", "symbol": "Symbol", "action": "Action"}
+                    )
+                    st.dataframe(ev_df, hide_index=True, use_container_width=True, height=350)
+                else:
+                    st.caption("No entries/exits in the last 6 months.")
+            with tab_params:
+                st.json(selected_strategy["parameters"])
+        with st.expander("Delete this strategy"):
+            owner_key_input = st.text_input("Owner key", type="password", key="delete_owner_key")
+            if st.button("Delete", key="delete_strategy_button"):
+                if db_public.delete_strategy(selected_strategy["id"], owner_key_input.strip()):
+                    st.success("Deleted.")
+                    st.rerun()
+                else:
+                    st.error("Wrong owner key (or already deleted).")
+    st.divider()
 
 monthly_prices = cached_load_prices(price_col, price_freq)
 

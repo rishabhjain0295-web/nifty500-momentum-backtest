@@ -36,3 +36,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python scripts/refresh_weekly_data.py
+
+      - name: Recompute Saved Strategies (entries/exits + current positions)
+        env:
+          PUBLIC_STRATEGIES_DATABASE_URL: ${{ secrets.PUBLIC_STRATEGIES_DATABASE_URL }}
+        run: python scripts/update_saved_strategies.py

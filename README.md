@@ -12,6 +12,41 @@ lookback, skip period, price filter, and a toggle for point-in-time index
 membership. Shows equity curve, drawdown, current holdings, and lets you
 download the monthly returns.
 
+## Saved Strategies (public)
+
+A sidebar section lets ANYONE save the current Momentum Backtest
+configuration under a name, and anyone can browse any saved strategy's
+entries/exits over the trailing 6 months plus current positions --
+recomputed every Saturday morning as part of the existing weekly data
+refresh (`scripts/update_saved_strategies.py`, run via
+`.github/workflows/weekly-data-refresh.yml` after prices are topped up).
+Only the core parameters that determine which stocks are held are saved
+(see `momentum_strategy.SAVEABLE_PARAM_KEYS`) -- not cost/tax, leverage,
+or display settings.
+
+Backed by `db_public.py`, which shares the SAME Supabase project as the
+private `systematic-momentum-investing-portfolio` portal (a deliberate
+choice to manage one database instead of two) -- every table here is
+prefixed `public_` specifically to avoid colliding with that portal's
+own `saved_strategies` table, which has a different schema. This
+database only ever holds non-sensitive data (strategy configs + their
+computed entry/exit history); broker credentials and real trading state
+stay confined to the private portal's own tables in the same database.
+
+Since anyone can create a strategy (no login on this app), two
+lightweight anti-abuse measures are built into `db_public.py`: an
+`owner_key` shown once at save time (needed to delete that strategy
+later) and a hard cap (`MAX_STRATEGIES = 200`) so the free-tier database
+and the weekly recompute job both stay bounded.
+
+**Setup**: needs `public_strategies_database_url` in
+`.streamlit/secrets.toml` (see `.streamlit/secrets.toml.example`) for
+the interactive app, and a `PUBLIC_STRATEGIES_DATABASE_URL` GitHub
+Actions repo secret for the weekly job. If your network doesn't have
+IPv6 connectivity, use Supabase's connection POOLER string (`...pooler.
+supabase.com:6543`), not the direct connection host -- Supabase's direct
+DB hostnames are IPv6-only.
+
 ## Data
 
 - `data/nifty500_list.csv` — current Nifty 500 constituents, pulled from NSE archives.

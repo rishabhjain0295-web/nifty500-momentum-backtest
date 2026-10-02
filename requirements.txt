@@ -9,3 +9,4 @@ xlrd
 openpyxl
 pyarrow
 jugaad-data
+psycopg2-binary
