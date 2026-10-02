@@ -1313,10 +1313,24 @@ def build_trade_log(
         added = new_holdings - equity_prev
         dropped = equity_prev - new_holdings
         n_active = len(new_holdings) if new_holdings else n_stocks
-        nav_at_date = nav.loc[date] if date in nav.index else None
+        # asof (last known value AT OR BEFORE date), not an exact-date lookup:
+        # strat_rets (and therefore nav) can be reindexed against a slightly
+        # different date grid upstream (e.g. app.py reindexes it to the
+        # benchmark's own index before calling this), so a holdings_history
+        # rebalance date isn't guaranteed to be an EXACT match in nav.index
+        # even though it's always close. An exact .loc lookup silently
+        # dropped the "added" registration below on any such mismatch,
+        # which then crashed here on the matching "dropped" date with a
+        # KeyError, since the symbol was never recorded as open.
+        nav_at_date = nav.asof(date)
+        if pd.isna(nav_at_date):
+            nav_at_date = None
 
         for sym in dropped:
-            entry_date, entry_price, entry_nav, entry_n_active = open_positions.pop(sym)
+            opened = open_positions.pop(sym, None)
+            if opened is None:
+                continue  # never recorded an entry for this symbol -- can't reconstruct a trade without one
+            entry_date, entry_price, entry_nav, entry_n_active = opened
             exit_price = monthly_prices.loc[date, sym] if sym in monthly_prices.columns else None
             if exit_price is None or pd.isna(exit_price):
                 continue
