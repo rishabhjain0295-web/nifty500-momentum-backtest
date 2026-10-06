@@ -485,7 +485,7 @@ if selected_strategy is not None:
             )
             with tab_positions:
                 if positions:
-                    st.dataframe(pd.DataFrame(positions), hide_index=True, use_container_width=True)
+                    st.dataframe(pd.DataFrame(positions), hide_index=True, width="stretch")
                 else:
                     st.caption("No current positions (e.g. parked in GOLDBEES, or no eligible stocks).")
             with tab_events:
@@ -493,7 +493,7 @@ if selected_strategy is not None:
                     ev_df = pd.DataFrame(events).rename(
                         columns={"event_date": "Date", "symbol": "Symbol", "action": "Action"}
                     )
-                    st.dataframe(ev_df, hide_index=True, use_container_width=True, height=350)
+                    st.dataframe(ev_df, hide_index=True, width="stretch", height=350)
                 else:
                     st.caption("No entries/exits in the last 6 months.")
             with tab_params:
@@ -755,7 +755,7 @@ else:
         margin=dict(t=30, l=10, r=10, b=10),
         height=450,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     st.subheader("Drawdown")
     dd = strat_cum / strat_cum.cummax() - 1
@@ -772,7 +772,7 @@ else:
         margin=dict(t=30, l=10, r=10, b=10),
         height=300,
     )
-    st.plotly_chart(fig_dd, use_container_width=True)
+    st.plotly_chart(fig_dd, width="stretch")
 
     st.subheader("Year-wise returns and drawdown")
     st.caption(
@@ -794,7 +794,7 @@ else:
         height=350,
         xaxis=dict(type="category"),
     )
-    st.plotly_chart(fig_yr, use_container_width=True)
+    st.plotly_chart(fig_yr, width="stretch")
 
     fig_yr_dd = go.Figure()
     fig_yr_dd.add_trace(go.Bar(x=yt.index, y=yt["strategy_max_drawdown"], name="Momentum strategy"))
@@ -808,7 +808,7 @@ else:
         height=350,
         xaxis=dict(type="category"),
     )
-    st.plotly_chart(fig_yr_dd, use_container_width=True)
+    st.plotly_chart(fig_yr_dd, width="stretch")
 
     with st.expander("Year-wise table"):
         st.dataframe(yt.style.format("{:.2%}"), height=300)

@@ -161,7 +161,7 @@ fig.update_layout(
     yaxis_title="Rs", legend=dict(orientation="h", yanchor="bottom", y=1.02),
     margin=dict(t=30, l=10, r=10, b=10), height=400,
 )
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 st.subheader("Instrument correction(s) vs trigger threshold")
 st.caption(
@@ -182,7 +182,7 @@ fig_dd.update_layout(
     legend=dict(orientation="h", yanchor="bottom", y=1.02),
     margin=dict(t=30, l=10, r=10, b=10), height=350,
 )
-st.plotly_chart(fig_dd, use_container_width=True)
+st.plotly_chart(fig_dd, width="stretch")
 
 if is_multi and len(result["per_instrument"]) > 1:
     st.subheader("Per-instrument breakdown")

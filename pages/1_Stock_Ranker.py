@@ -260,7 +260,7 @@ else:
         table[["Rank", "Symbol", "CompanyName", "Industry", score_col, "Volatility", "LastPrice", "Zone"]]
         .style.apply(highlight_zone, axis=1)
         .format({score_col: score_fmt, "Volatility": "{:.2%}", "LastPrice": "{:.2f}"}),
-        hide_index=True, height=600, use_container_width=True,
+        hide_index=True, height=600, width="stretch",
     )
 
     st.download_button(

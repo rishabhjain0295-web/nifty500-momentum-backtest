@@ -790,7 +790,7 @@ fig.update_layout(
     yaxis_title="Portfolio value (Rs)",
     margin=dict(t=30, l=10, r=10, b=10), height=400,
 )
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 col_a, col_b = st.columns(2)
 with col_a:
@@ -798,7 +798,7 @@ with col_a:
     fig_dd = go.Figure()
     fig_dd.add_trace(go.Scatter(x=dd.index, y=dd.values, fill="tozeroy", name="Drawdown"))
     fig_dd.update_layout(yaxis_tickformat=".0%", margin=dict(t=30, l=10, r=10, b=10), height=300)
-    st.plotly_chart(fig_dd, use_container_width=True)
+    st.plotly_chart(fig_dd, width="stretch")
 
 with col_b:
     st.subheader("R-multiple distribution")
@@ -809,7 +809,7 @@ with col_b:
         xaxis_title="R-multiple (P&L / amount risked)", yaxis_title="Trade count",
         margin=dict(t=30, l=10, r=10, b=10), height=300,
     )
-    st.plotly_chart(fig_r, use_container_width=True)
+    st.plotly_chart(fig_r, width="stretch")
 
 st.subheader("Exit reasons")
 st.dataframe(
@@ -855,7 +855,7 @@ if leverage_result is not None:
         fig_lev.update_layout(
             yaxis_title="Portfolio value (Rs)", margin=dict(t=30, l=10, r=10, b=10), height=350,
         )
-        st.plotly_chart(fig_lev, use_container_width=True)
+        st.plotly_chart(fig_lev, width="stretch")
 
         if leverage_result["events"]:
             ev_df = pd.DataFrame(leverage_result["events"])

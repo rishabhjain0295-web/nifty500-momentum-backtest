@@ -391,7 +391,7 @@ fig.update_layout(
     legend=dict(orientation="h", yanchor="bottom", y=1.02),
     margin=dict(t=30, l=10, r=10, b=10), height=450,
 )
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 st.subheader("Drawdown")
 strat_cum = (1 + strat_rets).cumprod()
@@ -437,7 +437,7 @@ fig_dd1.update_layout(
     yaxis_tickformat=".0%", yaxis_title="Drawdown",
     margin=dict(t=30, l=10, r=10, b=10), height=300,
 )
-st.plotly_chart(fig_dd1, use_container_width=True)
+st.plotly_chart(fig_dd1, width="stretch")
 
 fig_dd2 = go.Figure()
 fig_dd2.add_trace(go.Scatter(x=plain_value_dd.index, y=plain_value_dd.values, name="Plain SIP"))
@@ -450,7 +450,7 @@ fig_dd2.update_layout(
     legend=dict(orientation="h", yanchor="bottom", y=1.02),
     margin=dict(t=30, l=10, r=10, b=10), height=300,
 )
-st.plotly_chart(fig_dd2, use_container_width=True)
+st.plotly_chart(fig_dd2, width="stretch")
 
 if use_dynamic:
     col_a, col_b = st.columns([1, 1])
@@ -465,7 +465,7 @@ if use_dynamic:
             yaxis_title="Rs", legend=dict(orientation="h", yanchor="bottom", y=1.02),
             margin=dict(t=30, l=10, r=10, b=10), height=350,
         )
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width="stretch")
 
     with col_b:
         st.subheader("Trigger/recovery timeline")
@@ -502,7 +502,7 @@ if lumpsum is not None:
             yaxis_title="Rs", legend=dict(orientation="h", yanchor="bottom", y=1.02),
             margin=dict(t=30, l=10, r=10, b=10), height=350,
         )
-        st.plotly_chart(fig_lump, use_container_width=True)
+        st.plotly_chart(fig_lump, width="stretch")
 
         st.markdown("**Combined with each SIP mode**")
         combined_plain = plain["value"] + lumpsum["value"]
@@ -518,7 +518,7 @@ if lumpsum is not None:
             legend=dict(orientation="h", yanchor="bottom", y=1.02),
             margin=dict(t=30, l=10, r=10, b=10), height=400,
         )
-        st.plotly_chart(fig_combined, use_container_width=True)
+        st.plotly_chart(fig_combined, width="stretch")
 
         combined_cols = st.columns(2 if use_dynamic else 1)
         combined_cols[0].metric("Plain SIP + Lumpsum final value", fmt_rs(combined_plain.iloc[-1]))

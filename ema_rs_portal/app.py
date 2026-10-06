@@ -150,7 +150,7 @@ fig.update_layout(
     margin=dict(t=30, l=10, r=10, b=10),
     height=450,
 )
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 col_dd, col_spot = st.columns(2)
 with col_dd:
@@ -166,7 +166,7 @@ with col_dd:
         margin=dict(t=30, l=10, r=10, b=10),
         height=350,
     )
-    st.plotly_chart(fig_dd, use_container_width=True)
+    st.plotly_chart(fig_dd, width="stretch")
 
 with col_spot:
     st.subheader(f"{leg['label']} spot vs {ema_long}/{ema_short}-day EMA")
@@ -180,7 +180,7 @@ with col_spot:
         margin=dict(t=30, l=10, r=10, b=10),
         height=350,
     )
-    st.plotly_chart(fig_spot, use_container_width=True)
+    st.plotly_chart(fig_spot, width="stretch")
 
 st.subheader("Calendar-year returns")
 yt = yearly_table(strat_rets, bench_rets)
@@ -196,7 +196,7 @@ fig_yr.update_layout(
     height=350,
     xaxis=dict(type="category"),
 )
-st.plotly_chart(fig_yr, use_container_width=True)
+st.plotly_chart(fig_yr, width="stretch")
 
 with st.expander("Year-wise table"):
     st.dataframe(yt.style.format("{:.2%}"), height=300)
