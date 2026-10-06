@@ -29,7 +29,12 @@ import pandas as pd
 import streamlit as st
 
 from backtest_engine import NSE_UNIVERSES, compute_momentum_ranking, compute_trailing_volatility, ensure_stock_data
-from streamlit_cache import cached_load_current_universe, cached_load_prices, cached_load_universe_symbols
+from streamlit_cache import (
+    cached_load_current_universe,
+    cached_load_daily_prices,
+    cached_load_prices,
+    cached_load_universe_symbols,
+)
 
 st.set_page_config(page_title="Nifty 500 Stock Ranker", layout="wide")
 
@@ -123,6 +128,18 @@ with st.sidebar:
             "Max trailing return (%)", min_value=100.0, max_value=2000.0, value=500.0, step=50.0,
         )
 
+    use_52w_high_filter = st.checkbox(
+        "52-week high filter", value=False,
+        help="Excludes a stock trading more than X% below its own trailing 52-week high -- see "
+             "the Backtest page's identical control. Computed from real daily prices, not the "
+             "monthly/weekly grid everything else here uses."
+    )
+    max_drawdown_from_52w_high_pct = None
+    if use_52w_high_filter:
+        max_drawdown_from_52w_high_pct = st.slider(
+            "Max drawdown from 52-week high (%)", min_value=1.0, max_value=50.0, value=10.0, step=1.0,
+        )
+
     price_col = st.selectbox("Price field", ["Adj Close", "Close"], index=0)
     top_n = st.number_input("Highlight top N (buy zone)", min_value=1, max_value=100, value=10, step=1)
     exit_rank = st.number_input(
@@ -151,6 +168,7 @@ with st.sidebar:
                  f"date above -- min_value=1998-01-01 matches this app's actual price history."
         )
 monthly_prices = cached_load_prices(price_col, price_freq)
+daily_prices_for_52w_high = cached_load_daily_prices(price_col)[0] if use_52w_high_filter else None
 if custom_as_of_date is not None:
     eligible_dates = monthly_prices.index[monthly_prices.index <= pd.Timestamp(custom_as_of_date)]
     if len(eligible_dates) == 0:
@@ -173,6 +191,8 @@ ranked = compute_momentum_ranking(
     monthly_prices, None, as_of_date, lookback_months, skip_months, min_price, allowed_symbols,
     max_volatility_pct=max_volatility_pct, use_risk_adjusted=use_risk_adjusted,
     max_trailing_return_pct=max_trailing_return_pct,
+    daily_prices_for_52w_high=daily_prices_for_52w_high,
+    max_drawdown_from_52w_high_pct=max_drawdown_from_52w_high_pct,
 )
 used_fallback_date = False
 if custom_as_of_date is None and (ranked is None or ranked.empty) and len(monthly_prices.index) > 1:
@@ -188,6 +208,8 @@ if custom_as_of_date is None and (ranked is None or ranked.empty) and len(monthl
             monthly_prices, None, fallback_date, lookback_months, skip_months, min_price, allowed_symbols,
             max_volatility_pct=max_volatility_pct, use_risk_adjusted=use_risk_adjusted,
             max_trailing_return_pct=max_trailing_return_pct,
+            daily_prices_for_52w_high=daily_prices_for_52w_high,
+            max_drawdown_from_52w_high_pct=max_drawdown_from_52w_high_pct,
         )
         if candidate is not None and not candidate.empty:
             as_of_date = fallback_date

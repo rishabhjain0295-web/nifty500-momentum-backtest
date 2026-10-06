@@ -21,6 +21,7 @@ from backtest_engine import (
     load_membership_matrix,
     load_prices,
     load_universe_symbols,
+    load_wide_daily_field,
     run_backtest,
 )
 
@@ -29,6 +30,7 @@ SAVEABLE_PARAM_KEYS = [
     "n_stocks", "min_price", "price_col", "use_membership_filter", "weighting_mode",
     "use_exit_band", "exit_band_pct", "use_regime_filter", "gold_entry_lookback",
     "gold_exit_lookback", "max_volatility_pct", "use_risk_adjusted", "max_trailing_return_pct",
+    "max_drawdown_from_52w_high_pct",
 ]
 
 
@@ -52,6 +54,8 @@ def compute_holdings_history(parameters: dict) -> list[tuple[pd.Timestamp, list[
     )
     bench_px = load_benchmark(parameters["price_col"], price_freq)
     gold_px = load_gold_series(parameters["price_col"]) if parameters.get("use_regime_filter") else None
+    max_dd_52w = parameters.get("max_drawdown_from_52w_high_pct")
+    daily_prices_for_52w_high = load_wide_daily_field(parameters["price_col"]) if max_dd_52w is not None else None
 
     _, holdings_history = run_backtest(
         monthly_prices, membership,
@@ -64,6 +68,8 @@ def compute_holdings_history(parameters: dict) -> list[tuple[pd.Timestamp, list[
         max_volatility_pct=parameters.get("max_volatility_pct"),
         use_risk_adjusted=parameters.get("use_risk_adjusted", False),
         max_trailing_return_pct=parameters.get("max_trailing_return_pct"),
+        daily_prices_for_52w_high=daily_prices_for_52w_high,
+        max_drawdown_from_52w_high_pct=max_dd_52w,
     )
     return holdings_history
 

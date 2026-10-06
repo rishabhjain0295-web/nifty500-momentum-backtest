@@ -737,6 +737,17 @@ def compute_trailing_volatility(
     return window_prices.pct_change().std() * np.sqrt(12)
 
 
+def compute_52week_high(daily_prices: pd.DataFrame, as_of_date: pd.Timestamp, lookback_days: int = 365) -> pd.Series:
+    """Highest daily price per symbol over the trailing 365 calendar days
+    up to and including as_of_date -- the conventional "52-week high" a
+    real screener/terminal would show (computed from DAILY data, not a
+    monthly/weekly resample, which would understate the true high
+    whenever a stock peaked mid-period and pulled back by period-end).
+    Empty window (as_of_date before any daily data) returns all-NaN."""
+    window = daily_prices.loc[as_of_date - pd.Timedelta(days=lookback_days):as_of_date]
+    return window.max()
+
+
 def compute_momentum_ranking(
     monthly_prices: pd.DataFrame,
     membership: pd.DataFrame | None,
@@ -748,6 +759,8 @@ def compute_momentum_ranking(
     max_volatility_pct: float | None = None,
     use_risk_adjusted: bool = False,
     max_trailing_return_pct: float | None = None,
+    daily_prices_for_52w_high: pd.DataFrame | None = None,
+    max_drawdown_from_52w_high_pct: float | None = None,
 ) -> pd.Series | None:
     """Trailing lookback_months return (skipping the most recent skip_months)
     for every stock eligible as of as_of_date, sorted descending (first
@@ -790,6 +803,19 @@ def compute_momentum_ranking(
     look "exceptional" before this existed. Checked against the RAW
     return regardless of use_risk_adjusted, since the artifact is in the
     return itself, not in how it's scored.
+
+    max_drawdown_from_52w_high_pct, if given (together with
+    daily_prices_for_52w_high -- both are required, since this needs real
+    daily granularity, not the monthly/weekly resampled grid everything
+    else here works from), excludes a stock trading more than this % below
+    its trailing 52-week high, e.g. 10.0 requires last_price to be within
+    10% of that high (52w high 100 -> last_price must be >= 90). A classic
+    trend-confirmation filter: a stock can still show a strong trailing
+    return while having already rolled over materially from its peak;
+    this excludes those, keeping only names making (or near) new highs.
+    See compute_52week_high -- computed from daily data on purpose, since
+    a monthly/weekly resample would understate the true high whenever a
+    stock peaked mid-period and pulled back by period-end.
     """
     window = _momentum_window(monthly_prices, as_of_date, lookback_months, skip_months)
     if window is None:
@@ -819,6 +845,10 @@ def compute_momentum_ranking(
         if use_risk_adjusted:
             eligible &= volatility.notna() & (volatility > 1e-9)
             score = mom / volatility
+
+    if max_drawdown_from_52w_high_pct is not None and daily_prices_for_52w_high is not None:
+        high_52w = compute_52week_high(daily_prices_for_52w_high, as_of_date)
+        eligible &= (last_price / high_52w) >= (1 - max_drawdown_from_52w_high_pct / 100.0)
 
     score = score[eligible].dropna()
     return score.sort_values(ascending=False)
@@ -861,6 +891,8 @@ def run_backtest(
     max_volatility_pct: float | None = None,
     use_risk_adjusted: bool = False,
     max_trailing_return_pct: float | None = None,
+    daily_prices_for_52w_high: pd.DataFrame | None = None,
+    max_drawdown_from_52w_high_pct: float | None = None,
 ) -> tuple[pd.Series, list[tuple[pd.Timestamp, list[str]]]]:
     """Returns (monthly portfolio returns, [(rebalance_date, holdings), ...]).
 
@@ -979,6 +1011,8 @@ def run_backtest(
             monthly_prices, membership, today, lookback_months, skip_months, min_price, allowed_symbols,
             max_volatility_pct=max_volatility_pct, use_risk_adjusted=use_risk_adjusted,
             max_trailing_return_pct=max_trailing_return_pct,
+            daily_prices_for_52w_high=daily_prices_for_52w_high,
+            max_drawdown_from_52w_high_pct=max_drawdown_from_52w_high_pct,
         )
         if ranked is None or len(ranked) < n_stocks:
             continue

@@ -93,6 +93,21 @@ flatten 2003/2005/2006 -- those were genuinely strong years for Indian equities
 individual stocks whose *reported* return is a data artifact rather than a real
 market move.
 
+## 52-week high filter
+
+Optional, off by default: excludes a stock trading more than X% below its own
+trailing 52-week high (e.g. 10% requires the current price to be at least 90%
+of that high). A trend-confirmation filter -- a stock can show a strong
+trailing return while having already rolled over materially from its peak;
+this keeps only names making (or near) new highs. `compute_52week_high` in
+`backtest_engine.py` computes this from real DAILY prices (`load_wide_daily_
+field`), not the monthly/weekly resampled grid everything else here works
+from, since a resample would understate the true high whenever a stock peaked
+mid-period and pulled back by period-end. Adds real but modest cost to a full
+backtest (~2x on local testing, ~1s extra for a ~300-period 1998-2026 run) --
+needs a full daily-price lookup and rolling max at every rebalance, unlike the
+other filters, which only touch the monthly/weekly grid.
+
 ## Point-in-time membership (survivorship bias fix)
 
 The original dataset used *today's* Nifty 500 list applied backward to 2008,

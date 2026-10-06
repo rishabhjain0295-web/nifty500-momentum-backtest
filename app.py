@@ -286,6 +286,23 @@ with st.sidebar:
                  "often 10x-100x+."
         )
 
+    use_52w_high_filter = st.checkbox(
+        "52-week high filter", value=False,
+        help="Excludes a stock trading more than X% below its own trailing 52-week high, e.g. "
+             "10% requires the current price to be at least 90% of that high. A trend-"
+             "confirmation filter: a stock can show a strong trailing return while having "
+             "already rolled over materially from its peak -- this keeps only names making "
+             "(or near) new highs. Computed from real DAILY prices (not the monthly/weekly "
+             "grid everything else here uses), since a resample would understate the true high."
+    )
+    max_drawdown_from_52w_high_pct = None
+    if use_52w_high_filter:
+        max_drawdown_from_52w_high_pct = st.slider(
+            "Max drawdown from 52-week high (%)", min_value=1.0, max_value=50.0, value=10.0, step=1.0,
+            help="52-week high of 100 with a 10% max drawdown requires the stock to be trading "
+                 "at 90 or above.",
+        )
+
     st.header("Universe & data")
     price_col = st.selectbox("Price field", ["Adj Close", "Close"], index=0)
     min_price = st.number_input("Minimum price filter (Rs)", min_value=0.0, value=10.0, step=5.0)
@@ -443,6 +460,7 @@ with st.sidebar:
                     use_regime_filter=use_regime_filter, gold_entry_lookback=gold_entry_lookback,
                     gold_exit_lookback=gold_exit_lookback, max_volatility_pct=max_volatility_pct,
                     use_risk_adjusted=use_risk_adjusted, max_trailing_return_pct=max_trailing_return_pct,
+                    max_drawdown_from_52w_high_pct=max_drawdown_from_52w_high_pct,
                 )
                 try:
                     _, owner_key = db_public.save_strategy(name, params)
@@ -519,6 +537,10 @@ if use_membership_filter:
 bench_px = cached_load_benchmark(price_col, price_freq)
 gold_px = cached_load_gold(price_col) if use_regime_filter else None
 
+daily_close, daily_open = (
+    cached_load_daily_prices(price_col) if (use_52w_high_filter or use_stoploss or use_execution_lag) else (None, None)
+)
+
 strat_rets, holdings_history = run_backtest(
     monthly_prices, membership, lookback_months, skip_months, hold_months, n_stocks, min_price,
     use_exit_band, exit_band_pct,
@@ -526,10 +548,11 @@ strat_rets, holdings_history = run_backtest(
     weighting_mode, allowed_symbols,
     max_volatility_pct=max_volatility_pct, use_risk_adjusted=use_risk_adjusted,
     max_trailing_return_pct=max_trailing_return_pct,
+    daily_prices_for_52w_high=daily_close if use_52w_high_filter else None,
+    max_drawdown_from_52w_high_pct=max_drawdown_from_52w_high_pct,
 )
 
 if use_stoploss or use_execution_lag:
-    daily_close, daily_open = cached_load_daily_prices(price_col)
     if use_stoploss:
         stoploss_overlay = apply_stoploss(
             monthly_prices, daily_close, daily_open, holdings_history, stoploss_pct, max_reentries,
