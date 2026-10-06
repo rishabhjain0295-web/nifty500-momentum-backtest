@@ -22,9 +22,6 @@ backtest_engine.MUTUAL_FUNDS) alongside the Nifty 500 benchmark, in the
 KPIs, equity curve, and drawdown chart -- a hand-picked list of well-known
 funds, not exhaustive or AUM-ranked.
 """
-import json
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -75,30 +72,6 @@ st.caption(
     "Cross-sectional momentum: rank stocks by trailing return, go long the top N "
     "equal-weighted, rebalance periodically."
 )
-
-_summary_path = Path(__file__).resolve().parent / "data" / "latest_summary.json"
-if _summary_path.exists():
-    try:
-        _summary = json.loads(_summary_path.read_text())
-        with st.container(border=True):
-            st.caption(
-                "Reference: default configuration (Monthly, Nifty 500, top 30, 12mo lookback) -- "
-                "always current, refreshed every Saturday morning regardless of whether the "
-                "interactive backtest below has been rebooted yet."
-            )
-            scol1, scol2, scol3 = st.columns(3)
-            scol1.metric(
-                f"Last month's return (ending {_summary['as_of_date']})",
-                f"{_summary['strategy_return_pct']:+.2f}%",
-                delta=f"{_summary['strategy_return_pct'] - _summary['benchmark_return_pct']:+.2f}% vs Nifty 500",
-            )
-            scol2.metric("Nifty 500 benchmark", f"{_summary['benchmark_return_pct']:+.2f}%")
-            scol3.metric(
-                "Data refreshed",
-                pd.Timestamp(_summary["refreshed_at"]).strftime("%Y-%m-%d"),
-            )
-    except Exception:
-        pass  # best-effort banner -- a malformed/missing file shouldn't break the rest of the page
 
 with st.sidebar:
     st.header("Universe")

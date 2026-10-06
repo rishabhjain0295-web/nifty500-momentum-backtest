@@ -4,7 +4,7 @@ routine set up alongside this script) so the Stock Ranker page's live
 ranking -- and every other page's most recent month/week -- doesn't go
 stale between sessions.
 
-Does six things:
+Does five things:
   1. Tops up data/stocks/*.csv and data/index/{NIFTY500,NIFTY50}.csv with
      the last ~45 days of daily OHLCV (yfinance), merged into each existing
      file (overlapping days are overwritten with the fresh fetch, in case
@@ -22,19 +22,13 @@ Does six things:
      three fast binary files instead of parsing ~1000 CSVs itself (which
      used to be the dominant cost of a cold start, paid out TWICE on the
      Backtest page alone).
-  4. Computes data/latest_summary.json (see compute_latest_summary) --
-     the default Momentum Backtest configuration's most recent period
-     return, shown as an always-current banner on the Backtest page
-     (this file is git-tracked, so it updates on a plain code push --
-     unlike data/stocks/ itself).
-  5. Re-zips data/stocks/ (CSVs + the Parquet cache) and re-uploads it as
+  4. Re-zips data/stocks/ (CSVs + the Parquet cache) and re-uploads it as
      the stocks.zip GitHub Release asset the deployed app bootstraps from
      (gh release upload --clobber) -- data/stocks/ itself is gitignored
      (too large for git), this is the only way the deployed app sees the
      refresh.
-  6. Commits and pushes data/universes/, data/fno_stocks.csv, and
-     data/latest_summary.json (these ARE small enough to live in git
-     directly).
+  5. Commits and pushes data/universes/ and data/fno_stocks.csv (these ARE
+     small enough to live in git directly).
 
 Does NOT touch data/hourly/, data/15min/, or data/etfs/ -- out of scope
 for this specific request (Stock Ranker only uses data/stocks + the
@@ -146,54 +140,6 @@ def rebuild_consolidated_cache():
         print(f"  {field}: {wide.shape[0]} dates x {wide.shape[1]} symbols -> {path.name}")
 
 
-def compute_latest_summary():
-    """Writes data/latest_summary.json -- the default Momentum Backtest
-    configuration's (Monthly, 12/1/1/30, membership on, no regime/vol/
-    risk-adjusted, 500% sanity filter -- exactly app.py's own slider
-    defaults) most recent period return. This file IS git-tracked (small,
-    unlike data/stocks/), so app.py can show it as an always-current
-    banner near the top of the page -- a plain code push auto-redeploys
-    on Streamlit Cloud and picks up this file immediately, unlike
-    data/stocks/ itself, which is bootstrap-once and needs a manual
-    Reboot. Lets a visitor see last period's return without needing to
-    know (or care) whether the full interactive backtest below has
-    fresh data yet."""
-    import json
-    from datetime import datetime, timezone
-
-    from backtest_engine import load_benchmark, load_membership_matrix, load_prices, run_backtest
-
-    print("Computing latest-period summary for the default configuration...")
-    monthly_prices = load_prices("Adj Close", "ME")
-    membership = load_membership_matrix(monthly_prices.index, monthly_prices.columns)
-    bench_px = load_benchmark("Adj Close", "ME")
-
-    strat_rets, _ = run_backtest(
-        monthly_prices, membership, 12, 1, 1, 30, 10.0,
-        False, 0.0, False, bench_px, None, 150, 55,
-        "equal_monthly", None, max_trailing_return_pct=500.0,
-    )
-    bench_rets = bench_px.pct_change().reindex(strat_rets.index).dropna()
-    strat_rets = strat_rets.reindex(bench_rets.index)
-
-    summary = {
-        "as_of_date": str(strat_rets.index[-1].date()),
-        "refreshed_at": datetime.now(timezone.utc).isoformat(),
-        "strategy_return_pct": round(float(strat_rets.iloc[-1]) * 100, 2),
-        "benchmark_return_pct": round(float(bench_rets.iloc[-1]) * 100, 2),
-        "parameters": {
-            "universe": "Nifty 500", "rebal_freq": "Monthly", "lookback_months": 12,
-            "skip_months": 1, "hold_months": 1, "n_stocks": 30, "min_price": 10.0,
-            "price_col": "Adj Close", "use_membership_filter": True,
-            "max_trailing_return_pct": 500.0,
-        },
-    }
-    out_path = ROOT / "data" / "latest_summary.json"
-    out_path.write_text(json.dumps(summary, indent=2))
-    print(f"  {summary['as_of_date']}: strategy {summary['strategy_return_pct']}% vs "
-          f"benchmark {summary['benchmark_return_pct']}% -> {out_path.name}")
-
-
 def reupload_stocks_zip():
     print("Re-zipping data/stocks/...")
     zip_path = ROOT / "data" / "stocks.zip"
@@ -211,11 +157,8 @@ def reupload_stocks_zip():
 
 
 def commit_and_push():
-    print("Committing data/universes/, data/fno_stocks.csv, and data/latest_summary.json...")
-    subprocess.run(
-        ["git", "add", "data/universes", "data/fno_stocks.csv", "data/latest_summary.json"],
-        check=True, cwd=ROOT,
-    )
+    print("Committing data/universes/ and data/fno_stocks.csv...")
+    subprocess.run(["git", "add", "data/universes", "data/fno_stocks.csv"], check=True, cwd=ROOT)
     status = subprocess.run(
         ["git", "diff", "--cached", "--name-only"], check=True, cwd=ROOT, capture_output=True, text=True,
     )
@@ -238,12 +181,10 @@ def main():
     topup_indices()
     refresh_universe_lists()
     rebuild_consolidated_cache()
-    compute_latest_summary()
     reupload_stocks_zip()
     commit_and_push()
-    print("\nWeekly refresh complete. The 'Latest period's return' banner on the Backtest page "
-          "auto-updates from this push (data/latest_summary.json is git-tracked). The rest of "
-          "the deployed app still needs a manual Reboot to pick up the refreshed stocks.zip.")
+    print("\nWeekly refresh complete. The deployed Streamlit Cloud app still needs a manual "
+          "Reboot to pick up the refreshed stocks.zip.")
 
 
 if __name__ == "__main__":
