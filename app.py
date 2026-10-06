@@ -22,6 +22,9 @@ backtest_engine.MUTUAL_FUNDS) alongside the Nifty 500 benchmark, in the
 KPIs, equity curve, and drawdown chart -- a hand-picked list of well-known
 funds, not exhaustive or AUM-ranked.
 """
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -72,6 +75,30 @@ st.caption(
     "Cross-sectional momentum: rank stocks by trailing return, go long the top N "
     "equal-weighted, rebalance periodically."
 )
+
+_summary_path = Path(__file__).resolve().parent / "data" / "latest_summary.json"
+if _summary_path.exists():
+    try:
+        _summary = json.loads(_summary_path.read_text())
+        with st.container(border=True):
+            st.caption(
+                "Reference: default configuration (Monthly, Nifty 500, top 30, 12mo lookback) -- "
+                "always current, refreshed every Saturday morning regardless of whether the "
+                "interactive backtest below has been rebooted yet."
+            )
+            scol1, scol2, scol3 = st.columns(3)
+            scol1.metric(
+                f"Last month's return (ending {_summary['as_of_date']})",
+                f"{_summary['strategy_return_pct']:+.2f}%",
+                delta=f"{_summary['strategy_return_pct'] - _summary['benchmark_return_pct']:+.2f}% vs Nifty 500",
+            )
+            scol2.metric("Nifty 500 benchmark", f"{_summary['benchmark_return_pct']:+.2f}%")
+            scol3.metric(
+                "Data refreshed",
+                pd.Timestamp(_summary["refreshed_at"]).strftime("%Y-%m-%d"),
+            )
+    except Exception:
+        pass  # best-effort banner -- a malformed/missing file shouldn't break the rest of the page
 
 with st.sidebar:
     st.header("Universe")
@@ -606,6 +633,28 @@ if custom_start_date is not None:
         f"({len(holdings_history)} rebalances since). Ranking still uses real price history from "
         "before this date, so the first rebalance shown isn't cold-started."
     )
+
+if len(strat_rets) > 0:
+    last_period_date = strat_rets.index[-1]
+    last_strat_ret = strat_rets.iloc[-1]
+    last_bench_ret = bench_rets.iloc[-1] if len(bench_rets) > 0 else float("nan")
+    st.subheader(f"Latest {period_word}'s return")
+    lcol1, lcol2, lcol3 = st.columns(3)
+    lcol1.metric(
+        f"Strategy, {period_word} ending {last_period_date.date()}", fmt_pct(last_strat_ret),
+        delta=fmt_pct(last_strat_ret - last_bench_ret) + " vs bench" if pd.notna(last_bench_ret) else None,
+    )
+    lcol2.metric("Nifty 500 benchmark", fmt_pct(last_bench_ret))
+    data_as_of = monthly_prices.index.max()
+    lcol3.metric("Price data as of", str(data_as_of.date()))
+    days_stale = (pd.Timestamp.today().normalize() - data_as_of).days
+    if days_stale > 10:
+        st.warning(
+            f"Price data is {days_stale} days old -- this app only re-fetches fresh data on a "
+            "genuinely clean container start, not just a code update. If you expect this week's "
+            "data to already be in, the deployed app needs a manual Reboot (Manage app -> "
+            "overflow menu -> Reboot app on Streamlit Cloud) to pick it up."
+        )
 
 st.subheader("Performance")
 cols = st.columns(5)
