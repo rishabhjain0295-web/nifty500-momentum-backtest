@@ -42,10 +42,12 @@ and the weekly recompute job both stay bounded.
 **Setup**: needs `public_strategies_database_url` in
 `.streamlit/secrets.toml` (see `.streamlit/secrets.toml.example`) for
 the interactive app, and a `PUBLIC_STRATEGIES_DATABASE_URL` GitHub
-Actions repo secret for the weekly job. If your network doesn't have
-IPv6 connectivity, use Supabase's connection POOLER string (`...pooler.
-supabase.com:6543`), not the direct connection host -- Supabase's direct
-DB hostnames are IPv6-only.
+Actions repo secret for the weekly job. Use Supabase's SESSION pooler
+connection string (`...pooler.supabase.com:5432`), not the direct
+connection host (IPv6-only -- fails on networks without IPv6, a common
+home-ISP limitation) and not the Transaction pooler on port 6543
+(failed in production with "SSL SYSCALL error: EOF detected" --
+doesn't reliably support plain synchronous psycopg2 connections).
 
 ## Data
 
