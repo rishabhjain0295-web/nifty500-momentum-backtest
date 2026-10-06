@@ -28,6 +28,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from backtest_engine import (
+    INDEX_DIR,
     MUTUAL_FUNDS,
     NSE_UNIVERSES,
     apply_execution_lag,
@@ -608,9 +609,23 @@ if custom_start_date is not None:
     )
 
 if len(strat_rets) > 0:
-    last_period_date = strat_rets.index[-1]
-    last_strat_ret = strat_rets.iloc[-1]
-    last_bench_ret = bench_rets.iloc[-1] if len(bench_rets) > 0 else float("nan")
+    # strat_rets.index[-1] can be an IN-PROGRESS period -- resample() labels
+    # a period by its calendar end (e.g. "2026-10-31") even when only the
+    # first few days of that month/week have actually happened yet, since
+    # it just takes the LAST available row inside that bucket. Showing
+    # that partial period as "the latest return" is misleading (a tiny
+    # number from a few days, not a real rebalance result) -- so prefer
+    # the latest period whose calendar end has actually passed. This is
+    # purely a resample-bucketing artifact, NOT a data-freshness signal --
+    # e.g. with good up-to-date data checked a few days before month-end,
+    # the latest COMPLETE month is naturally last month, same as it would
+    # be for anyone's real brokerage statement.
+    today = pd.Timestamp.today().normalize()
+    complete_periods = strat_rets.index[strat_rets.index <= today]
+    is_partial = len(complete_periods) < len(strat_rets)
+    last_period_date = complete_periods[-1] if len(complete_periods) > 0 else strat_rets.index[-1]
+    last_strat_ret = strat_rets.loc[last_period_date]
+    last_bench_ret = bench_rets.loc[last_period_date] if last_period_date in bench_rets.index else float("nan")
     st.subheader(f"Latest {period_word}'s return")
     lcol1, lcol2, lcol3 = st.columns(3)
     lcol1.metric(
@@ -618,9 +633,25 @@ if len(strat_rets) > 0:
         delta=fmt_pct(last_strat_ret - last_bench_ret) + " vs bench" if pd.notna(last_bench_ret) else None,
     )
     lcol2.metric("Nifty 500 benchmark", fmt_pct(last_bench_ret))
-    data_as_of = monthly_prices.index.max()
+    if is_partial:
+        st.caption(
+            f"The current {period_word} is still in progress (not yet a complete rebalance "
+            f"period) -- showing the last COMPLETE {period_word} instead."
+        )
+
+    # Data freshness is a SEPARATE question from the above -- checked
+    # against the raw (unresampled) benchmark file's own last row, since a
+    # resample label (monthly_prices.index.max()) is always a calendar
+    # period-end and can't tell stale data from "the current period just
+    # hasn't finished yet" (exactly the bug the is_partial logic above
+    # works around).
+    try:
+        raw_bench = pd.read_csv(INDEX_DIR / "NIFTY500.csv", index_col=0, parse_dates=True)
+        data_as_of = raw_bench.index.max()
+    except Exception:
+        data_as_of = monthly_prices.index.max()
     lcol3.metric("Price data as of", str(data_as_of.date()))
-    days_stale = (pd.Timestamp.today().normalize() - data_as_of).days
+    days_stale = (today - data_as_of).days
     if days_stale > 10:
         st.warning(
             f"Price data is {days_stale} days old -- this app only re-fetches fresh data on a "

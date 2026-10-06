@@ -27,8 +27,17 @@ Does five things:
      (gh release upload --clobber) -- data/stocks/ itself is gitignored
      (too large for git), this is the only way the deployed app sees the
      refresh.
-  5. Commits and pushes data/universes/ and data/fno_stocks.csv (these ARE
-     small enough to live in git directly).
+  5. Commits and pushes data/index/, data/universes/, and data/fno_stocks.csv
+     (these ARE small enough to live in git directly). data/index/ was
+     topped up in step 1 but NOT committed here for a long stretch -- a
+     real bug (git add only listed data/universes + data/fno_stocks.csv),
+     which silently discarded every week's index refresh the moment the
+     ephemeral GitHub Actions runner shut down. The benchmark file
+     (data/index/NIFTY500.csv) was stuck weeks in the past in git even
+     though data/stocks/ (re-uploaded separately as a Release asset) kept
+     updating -- and since app.py aligns strat_rets to the benchmark's own
+     index (strat_rets.reindex(bench_rets.index)), this silently truncated
+     every page's results to whatever the stale benchmark still covered.
 
 Does NOT touch data/hourly/, data/15min/, or data/etfs/ -- out of scope
 for this specific request (Stock Ranker only uses data/stocks + the
@@ -157,8 +166,10 @@ def reupload_stocks_zip():
 
 
 def commit_and_push():
-    print("Committing data/universes/ and data/fno_stocks.csv...")
-    subprocess.run(["git", "add", "data/universes", "data/fno_stocks.csv"], check=True, cwd=ROOT)
+    print("Committing data/index/, data/universes/, and data/fno_stocks.csv...")
+    subprocess.run(
+        ["git", "add", "data/index", "data/universes", "data/fno_stocks.csv"], check=True, cwd=ROOT,
+    )
     status = subprocess.run(
         ["git", "diff", "--cached", "--name-only"], check=True, cwd=ROOT, capture_output=True, text=True,
     )
@@ -166,7 +177,7 @@ def commit_and_push():
         print("  No changes to commit.")
         return
     subprocess.run(
-        ["git", "commit", "-m", "Weekly data refresh: universe lists + F&O list\n\n"
+        ["git", "commit", "-m", "Weekly data refresh: index data, universe lists + F&O list\n\n"
          "Automated via the scheduled weekly refresh routine "
          "(scripts/refresh_weekly_data.py).\n\n"
          "Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"],
