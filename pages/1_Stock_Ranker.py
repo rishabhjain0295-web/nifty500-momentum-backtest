@@ -143,9 +143,12 @@ with st.sidebar:
     if use_custom_date:
         custom_as_of_date = st.date_input(
             "As-of date", value=pd.Timestamp.today() - pd.DateOffset(months=6),
+            min_value=pd.Timestamp("1998-01-01"),
             help=f"Snapped to the latest available {period_word}-end ON OR BEFORE this date -- "
                  f"if you pick a date that isn't exactly a {period_word}-end, it uses whatever "
-                 f"period actually closed most recently before it."
+                 f"period actually closed most recently before it. Without an explicit "
+                 f"min_value, Streamlit's date picker defaults to roughly 10 years before the "
+                 f"date above -- min_value=1998-01-01 matches this app's actual price history."
         )
 monthly_prices = cached_load_prices(price_col, price_freq)
 if custom_as_of_date is not None:

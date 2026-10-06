@@ -117,6 +117,10 @@ with st.sidebar:
     if use_custom_start:
         custom_start_date = st.date_input(
             "Start date", value=pd.Timestamp.today() - pd.DateOffset(years=5),
+            min_value=pd.Timestamp("1998-01-01"),
+            help="As far back as 1998-01-01 -- this app's actual price history. Without an "
+                 "explicit min_value, Streamlit's date picker defaults to roughly 10 years "
+                 "before the date above.",
         )
 
     st.header("MTF Leverage Overlay")
