@@ -137,7 +137,8 @@ with st.sidebar:
     max_drawdown_from_52w_high_pct = None
     if use_52w_high_filter:
         max_drawdown_from_52w_high_pct = st.slider(
-            "Max drawdown from 52-week high (%)", min_value=1.0, max_value=50.0, value=10.0, step=1.0,
+            "Max drawdown from 52-week high (%)", min_value=0.0, max_value=50.0, value=10.0, step=1.0,
+            help="0% = the stock must be AT OR ABOVE its prior 52-week high today (a genuine new high).",
         )
 
     price_col = st.selectbox("Price field", ["Adj Close", "Close"], index=0)

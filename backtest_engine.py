@@ -739,12 +739,24 @@ def compute_trailing_volatility(
 
 def compute_52week_high(daily_prices: pd.DataFrame, as_of_date: pd.Timestamp, lookback_days: int = 365) -> pd.Series:
     """Highest daily price per symbol over the trailing 365 calendar days
-    up to and including as_of_date -- the conventional "52-week high" a
-    real screener/terminal would show (computed from DAILY data, not a
-    monthly/weekly resample, which would understate the true high
-    whenever a stock peaked mid-period and pulled back by period-end).
+    STRICTLY BEFORE as_of_date (not including that day's own price) --
+    the conventional "52-week high" a real screener/terminal would show
+    (computed from DAILY data, not a monthly/weekly resample, which would
+    understate the true high whenever a stock peaked mid-period and
+    pulled back by period-end).
+
+    Excludes as_of_date deliberately: a stock's own current price is
+    trivially never above a high that includes itself, so an inclusive
+    window would make "price at or above its 52-week high" (a 0% max
+    drawdown) vacuously true for every stock. Excluding today makes that
+    threshold mean what it says -- a genuine new 52-week high (today's
+    close breaking out above the PRIOR year's high) -- while barely
+    changing anything for a looser tolerance band (e.g. 10%), since
+    dropping one day from a ~252-trading-day population rarely moves
+    the max.
+
     Empty window (as_of_date before any daily data) returns all-NaN."""
-    window = daily_prices.loc[as_of_date - pd.Timedelta(days=lookback_days):as_of_date]
+    window = daily_prices.loc[as_of_date - pd.Timedelta(days=lookback_days):as_of_date - pd.Timedelta(days=1)]
     return window.max()
 
 
@@ -808,14 +820,18 @@ def compute_momentum_ranking(
     daily_prices_for_52w_high -- both are required, since this needs real
     daily granularity, not the monthly/weekly resampled grid everything
     else here works from), excludes a stock trading more than this % below
-    its trailing 52-week high, e.g. 10.0 requires last_price to be within
-    10% of that high (52w high 100 -> last_price must be >= 90). A classic
-    trend-confirmation filter: a stock can still show a strong trailing
-    return while having already rolled over materially from its peak;
-    this excludes those, keeping only names making (or near) new highs.
-    See compute_52week_high -- computed from daily data on purpose, since
-    a monthly/weekly resample would understate the true high whenever a
-    stock peaked mid-period and pulled back by period-end.
+    its trailing 52-week high (computed over the PRIOR year, excluding
+    as_of_date itself -- see compute_52week_high), e.g. 10.0 requires
+    last_price to be within 10% of that high (52w high 100 -> last_price
+    must be >= 90). A classic trend-confirmation filter: a stock can still
+    show a strong trailing return while having already rolled over
+    materially from its peak; this excludes those, keeping only names
+    making (or near) new highs. 0.0 is the strict case: last_price must
+    be AT OR ABOVE the prior year's high -- a genuine new 52-week high
+    today, not just "close to" one. See compute_52week_high -- computed
+    from daily data on purpose, since a monthly/weekly resample would
+    understate the true high whenever a stock peaked mid-period and
+    pulled back by period-end.
     """
     window = _momentum_window(monthly_prices, as_of_date, lookback_months, skip_months)
     if window is None:
